@@ -168,7 +168,24 @@
     renderHistory();
     updateHostIndicator();
     updateScopeHint();
-    updateLivePreview();
+
+    // Chờ thư viện Temml sẵn sàng (kiểm tra mỗi 100ms) rồi mới render công thức mặc định
+    if (typeof temml !== "undefined") {
+      updateLivePreview();
+    } else {
+      if (dom.mathPreview) {
+        dom.mathPreview.innerHTML =
+          '<span class="preview-placeholder">Đang tải thư viện toán học Temml...</span>';
+      }
+      waitForTemml().then((ready) => {
+        if (ready) {
+          updateLivePreview();
+        } else if (dom.mathPreview) {
+          dom.mathPreview.innerHTML =
+            '<span class="preview-error">Không thể tải thư viện Temml (jsDelivr/unpkg). Vui lòng kiểm tra kết nối mạng và tải lại Add-in.</span>';
+        }
+      });
+    }
   }
 
   const PROJECT_HOME_URL = "https://tex-math.github.io/latex-word-converter/";
@@ -451,17 +468,80 @@
   }
 
   /* ------------------------------------------------------------------------
-   * 2. TEMML (LaTeX -> MathML chuẩn XML) & XEM TRƯỚC TRỰC TIẾP
+   * 2. TEMML (LaTeX -> MathML chuẩn XML), HÀM CHỜ waitForTemml() & XEM TRƯỚC
    * ------------------------------------------------------------------------ */
+  const TEMML_FALLBACK_URL = "https://unpkg.com/temml@0.10.28/dist/temml.min.js";
+  let temmlFallbackTriggered = false;
+  let temmlWaitPromise = null;
+
+  function triggerTemmlFallbackCdn() {
+    if (temmlFallbackTriggered || typeof temml !== "undefined") return;
+    temmlFallbackTriggered = true;
+    if (typeof window.__loadTemmlFallback === "function") {
+      window.__loadTemmlFallback();
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = TEMML_FALLBACK_URL;
+    script.async = true;
+    document.head.appendChild(script);
+  }
+
+  /**
+   * Kiểm tra biến toàn cục `temml` mỗi 100ms cho đến khi thư viện tải xong.
+   * Nếu jsDelivr chậm quá 2.5 giây sẽ tự động nạp bản dự phòng từ unpkg.
+   */
+  function waitForTemml(callback, timeoutMs = 15000) {
+    if (typeof temml !== "undefined") {
+      if (typeof callback === "function") callback(true);
+      return Promise.resolve(true);
+    }
+
+    if (!temmlWaitPromise) {
+      temmlWaitPromise = new Promise((resolve) => {
+        const checkIntervalMs = 100;
+        let elapsedMs = 0;
+
+        const timer = window.setInterval(() => {
+          elapsedMs += checkIntervalMs;
+
+          if (typeof temml !== "undefined") {
+            window.clearInterval(timer);
+            temmlWaitPromise = null;
+            resolve(true);
+            return;
+          }
+
+          if (elapsedMs >= 2500 && !temmlFallbackTriggered) {
+            triggerTemmlFallbackCdn();
+          }
+
+          if (elapsedMs >= timeoutMs) {
+            window.clearInterval(timer);
+            temmlWaitPromise = null;
+            resolve(false);
+          }
+        }, checkIntervalMs);
+      });
+    }
+
+    if (typeof callback === "function") {
+      temmlWaitPromise.then((ready) => callback(ready));
+    }
+    return temmlWaitPromise;
+  }
+
+  window.waitForTemml = waitForTemml;
+
   function renderLatexToMathML(latex, displayMode) {
-    if (typeof window.temml === "undefined") {
+    if (typeof temml === "undefined") {
       throw new Error("Thư viện Temml chưa tải xong. Vui lòng kiểm tra kết nối mạng.");
     }
     const clean = stripOuterDelimiters(latex);
     if (!clean) {
       throw new Error("Nội dung công thức LaTeX đang trống.");
     }
-    return window.temml.renderToString(clean, {
+    return temml.renderToString(clean, {
       displayMode: Boolean(displayMode),
       xml: true,
       throwOnError: true,
@@ -492,6 +572,21 @@
       state.lastMathML = "";
       dom.mathPreview.innerHTML =
         '<span class="preview-placeholder">Nhập mã LaTeX để xem trước công thức...</span>';
+      return;
+    }
+
+    if (typeof temml === "undefined") {
+      state.lastMathML = "";
+      dom.mathPreview.innerHTML =
+        '<span class="preview-placeholder">Đang tải thư viện toán học Temml...</span>';
+      waitForTemml((ready) => {
+        if (ready) {
+          updateLivePreview();
+        } else if (dom.mathPreview) {
+          dom.mathPreview.innerHTML =
+            '<span class="preview-error">Không thể tải thư viện Temml (jsDelivr/unpkg). Vui lòng kiểm tra kết nối mạng và tải lại Add-in.</span>';
+        }
+      });
       return;
     }
 
@@ -1373,6 +1468,15 @@
       return;
     }
 
+    if (typeof temml === "undefined") {
+      showStatus("Đang chờ thư viện Temml tải xong...", "info");
+      const ready = await waitForTemml();
+      if (!ready) {
+        showStatus("Không thể tải thư viện Temml. Vui lòng kiểm tra kết nối mạng.", "error");
+        return;
+      }
+    }
+
     state.cancelRequested = false;
     setBusy(true, true);
     renderErrorReport([]);
@@ -1664,6 +1768,13 @@
 
     setBusy(true);
     try {
+      if (typeof temml === "undefined") {
+        showStatus("Đang chờ thư viện Temml tải xong...", "info");
+        const ready = await waitForTemml();
+        if (!ready) {
+          throw new Error("Không thể tải thư viện Temml từ jsDelivr/unpkg.");
+        }
+      }
       const ooxml = latexToWordOoxml(latex, displayMode);
 
       await Word.run(async (context) => {
@@ -4751,8 +4862,8 @@
           ? dom.optHighlightError.checked
           : true;
 
-    const extractOpts = getExtractionOptions();
-    if (!extractOpts.allowInline && !extractOpts.allowDisplay) {
+    const extractOpts = getScanOptions();
+    if (!extractOpts.useInline && !extractOpts.useDisplay) {
       showStatus("Vui lòng bật ít nhất một cú pháp nhận diện LaTeX.", "warn");
       return null;
     }
@@ -4901,7 +5012,7 @@
 
             try {
               // Kiểm tra cú pháp nghiêm ngặt bằng Temml (nếu có) trước khi mã hóa MTEF
-              if (typeof window.temml !== "undefined") {
+              if (typeof temml !== "undefined") {
                 renderLatexToMathML(match.latex, match.displayMode);
               }
 
