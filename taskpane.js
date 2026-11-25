@@ -168,24 +168,7 @@
     renderHistory();
     updateHostIndicator();
     updateScopeHint();
-
-    // Chờ thư viện Temml sẵn sàng (kiểm tra mỗi 100ms) rồi mới render công thức mặc định
-    if (typeof temml !== "undefined") {
-      updateLivePreview();
-    } else {
-      if (dom.mathPreview) {
-        dom.mathPreview.innerHTML =
-          '<span class="preview-placeholder">Đang tải thư viện toán học Temml...</span>';
-      }
-      waitForTemml().then((ready) => {
-        if (ready) {
-          updateLivePreview();
-        } else if (dom.mathPreview) {
-          dom.mathPreview.innerHTML =
-            '<span class="preview-error">Không thể tải thư viện Temml (jsDelivr/unpkg). Vui lòng kiểm tra kết nối mạng và tải lại Add-in.</span>';
-        }
-      });
-    }
+    updateLivePreview();
   }
 
   const PROJECT_HOME_URL = "https://tex-math.github.io/latex-word-converter/";
@@ -468,75 +451,9 @@
   }
 
   /* ------------------------------------------------------------------------
-   * 2. TEMML (LaTeX -> MathML chuẩn XML), HÀM CHỜ waitForTemml() & XEM TRƯỚC
+   * 2. TEMML CỤC BỘ (temml.render / temml.renderToString) & XEM TRƯỚC TRỰC TIẾP
    * ------------------------------------------------------------------------ */
-  const TEMML_FALLBACK_URL = "https://unpkg.com/temml@0.10.28/dist/temml.min.js";
-  let temmlFallbackTriggered = false;
-  let temmlWaitPromise = null;
-
-  function triggerTemmlFallbackCdn() {
-    if (temmlFallbackTriggered || typeof temml !== "undefined") return;
-    temmlFallbackTriggered = true;
-    if (typeof window.__loadTemmlFallback === "function") {
-      window.__loadTemmlFallback();
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = TEMML_FALLBACK_URL;
-    script.async = true;
-    document.head.appendChild(script);
-  }
-
-  /**
-   * Kiểm tra biến toàn cục `temml` mỗi 100ms cho đến khi thư viện tải xong.
-   * Nếu jsDelivr chậm quá 2.5 giây sẽ tự động nạp bản dự phòng từ unpkg.
-   */
-  function waitForTemml(callback, timeoutMs = 15000) {
-    if (typeof temml !== "undefined") {
-      if (typeof callback === "function") callback(true);
-      return Promise.resolve(true);
-    }
-
-    if (!temmlWaitPromise) {
-      temmlWaitPromise = new Promise((resolve) => {
-        const checkIntervalMs = 100;
-        let elapsedMs = 0;
-
-        const timer = window.setInterval(() => {
-          elapsedMs += checkIntervalMs;
-
-          if (typeof temml !== "undefined") {
-            window.clearInterval(timer);
-            temmlWaitPromise = null;
-            resolve(true);
-            return;
-          }
-
-          if (elapsedMs >= 2500 && !temmlFallbackTriggered) {
-            triggerTemmlFallbackCdn();
-          }
-
-          if (elapsedMs >= timeoutMs) {
-            window.clearInterval(timer);
-            temmlWaitPromise = null;
-            resolve(false);
-          }
-        }, checkIntervalMs);
-      });
-    }
-
-    if (typeof callback === "function") {
-      temmlWaitPromise.then((ready) => callback(ready));
-    }
-    return temmlWaitPromise;
-  }
-
-  window.waitForTemml = waitForTemml;
-
   function renderLatexToMathML(latex, displayMode) {
-    if (typeof temml === "undefined") {
-      throw new Error("Thư viện Temml chưa tải xong. Vui lòng kiểm tra kết nối mạng.");
-    }
     const clean = stripOuterDelimiters(latex);
     if (!clean) {
       throw new Error("Nội dung công thức LaTeX đang trống.");
@@ -575,25 +492,19 @@
       return;
     }
 
-    if (typeof temml === "undefined") {
-      state.lastMathML = "";
-      dom.mathPreview.innerHTML =
-        '<span class="preview-placeholder">Đang tải thư viện toán học Temml...</span>';
-      waitForTemml((ready) => {
-        if (ready) {
-          updateLivePreview();
-        } else if (dom.mathPreview) {
-          dom.mathPreview.innerHTML =
-            '<span class="preview-error">Không thể tải thư viện Temml (jsDelivr/unpkg). Vui lòng kiểm tra kết nối mạng và tải lại Add-in.</span>';
-        }
-      });
-      return;
-    }
-
+    const clean = stripOuterDelimiters(raw);
     try {
-      const mathml = renderLatexToMathML(raw, state.displayMode);
-      state.lastMathML = mathml;
-      dom.mathPreview.innerHTML = mathml;
+      dom.mathPreview.innerHTML = "";
+      temml.render(clean, dom.mathPreview, {
+        displayMode: Boolean(state.displayMode),
+        throwOnError: true
+      });
+      state.lastMathML = temml.renderToString(clean, {
+        displayMode: Boolean(state.displayMode),
+        xml: true,
+        throwOnError: true,
+        annotate: false
+      });
     } catch (err) {
       state.lastMathML = "";
       dom.mathPreview.innerHTML = "";
@@ -1005,10 +916,298 @@
     );
   }
 
+  /**
+   * Kiểm tra ngoặc nhọn cân bằng trước khi chạy bộ dịch dự phòng để vẫn
+   * phát hiện chính xác công thức LaTeX sai cú pháp thật sự.
+   */
+  function hasBalancedLatexBraces(str) {
+    let depth = 0;
+    for (let i = 0; i < str.length; i++) {
+      if (str[i] === "\\" && i + 1 < str.length) {
+        i += 1;
+        continue;
+      }
+      if (str[i] === "{") depth += 1;
+      else if (str[i] === "}") {
+        depth -= 1;
+        if (depth < 0) return false;
+      }
+    }
+    return depth === 0;
+  }
+
+  /**
+   * Bộ dịch dự phòng (Fallback LaTeX-to-OMML) viết bằng JavaScript thuần.
+   * Xử lý trơn tru \frac, \sqrt (căn bậc 2 & căn bậc n), chỉ số trên (^),
+   * chỉ số dưới (_), ngoặc, tích phân, tổng, giới hạn, vectơ, ma trận và ký hiệu
+   * khi gặp cú pháp đặc biệt mà Temml không hỗ trợ.
+   */
+  function astNodesToOmml(nodes) {
+    if (!nodes || nodes.length === 0) return "";
+    let out = "";
+
+    function convertSingleNode(node) {
+      if (!node) return "";
+      switch (node.kind) {
+        case "char": {
+          const isNormal =
+            node.tf === MT_FN_NUMBER ||
+            node.tf === MT_FN_TEXT ||
+            node.tf === MT_FN_FUNCTION ||
+            node.tf === MT_FN_UCGREEK ||
+            node.tf === MT_FN_SYMBOL;
+          return createOmmlRun(node.ch || "", isNormal);
+        }
+
+        case "space":
+          return createOmmlRun(" ", true);
+
+        case "text":
+        case "func":
+          return createOmmlRun(node.name || node.text || "", true);
+
+        case "group":
+          return astNodesToOmml(node.items || []);
+
+        case "frac":
+          return (
+            "<m:f>" +
+              "<m:num>" + astNodesToOmml(node.num || []) + "</m:num>" +
+              "<m:den>" + astNodesToOmml(node.den || []) + "</m:den>" +
+            "</m:f>"
+          );
+
+        case "root": {
+          const bodyXml = astNodesToOmml(node.body || []);
+          if (node.deg && node.deg.length > 0) {
+            return (
+              "<m:rad>" +
+                "<m:deg>" + astNodesToOmml(node.deg) + "</m:deg>" +
+                "<m:e>" + bodyXml + "</m:e>" +
+              "</m:rad>"
+            );
+          }
+          return (
+            "<m:rad>" +
+              '<m:radPr><m:degHide m:val="1"/></m:radPr>' +
+              "<m:deg/>" +
+              "<m:e>" + bodyXml + "</m:e>" +
+            "</m:rad>"
+          );
+        }
+
+        case "script": {
+          const subXml = node.sub ? astNodesToOmml(node.sub) : "";
+          const supXml = node.sup ? astNodesToOmml(node.sup) : "";
+          if (subXml && supXml) {
+            return (
+              "<m:sSubSup>" +
+                "<m:e>" + createOmmlRun(" ", true) + "</m:e>" +
+                "<m:sub>" + subXml + "</m:sub>" +
+                "<m:sup>" + supXml + "</m:sup>" +
+              "</m:sSubSup>"
+            );
+          }
+          if (supXml) {
+            return (
+              "<m:sSup>" +
+                "<m:e>" + createOmmlRun(" ", true) + "</m:e>" +
+                "<m:sup>" + supXml + "</m:sup>" +
+              "</m:sSup>"
+            );
+          }
+          if (subXml) {
+            return (
+              "<m:sSub>" +
+                "<m:e>" + createOmmlRun(" ", true) + "</m:e>" +
+                "<m:sub>" + subXml + "</m:sub>" +
+              "</m:sSub>"
+            );
+          }
+          return "";
+        }
+
+        case "fence": {
+          const beg = node.left && node.left !== "." ? node.left : "";
+          const end = node.right && node.right !== "." ? node.right : "";
+          return (
+            "<m:d>" +
+              "<m:dPr>" +
+                '<m:begChr m:val="' + escapeXml(beg) + '"/>' +
+                '<m:endChr m:val="' + escapeXml(end) + '"/>' +
+              "</m:dPr>" +
+              "<m:e>" + astNodesToOmml(node.body || []) + "</m:e>" +
+            "</m:d>"
+          );
+        }
+
+        case "nary": {
+          const opChars = {
+            int: "∫", iint: "∬", iiint: "∭", oint: "∮",
+            sum: "∑", prod: "∏", coprod: "∐", bigcup: "⋃", bigcap: "⋂"
+          };
+          const chr = opChars[node.op] || "∫";
+          const limLoc = node.op && node.op.indexOf("int") !== -1 ? "subSup" : "undOvr";
+          const subXml = node.sub ? astNodesToOmml(node.sub) : "";
+          const supXml = node.sup ? astNodesToOmml(node.sup) : "";
+          return (
+            "<m:nary>" +
+              "<m:naryPr>" +
+                '<m:chr m:val="' + escapeXml(chr) + '"/>' +
+                '<m:limLoc m:val="' + limLoc + '"/>' +
+                (subXml ? "" : '<m:subHide m:val="1"/>') +
+                (supXml ? "" : '<m:supHide m:val="1"/>') +
+              "</m:naryPr>" +
+              "<m:sub>" + subXml + "</m:sub>" +
+              "<m:sup>" + supXml + "</m:sup>" +
+              "<m:e/>" +
+            "</m:nary>"
+          );
+        }
+
+        case "lim": {
+          const baseXml = createOmmlRun("lim", true);
+          const subXml = node.sub ? astNodesToOmml(node.sub) : "";
+          return subXml
+            ? "<m:limLow><m:e>" + baseXml + "</m:e><m:lim>" + subXml + "</m:lim></m:limLow>"
+            : baseXml;
+        }
+
+        case "accent": {
+          const bodyXml = astNodesToOmml(node.body || []);
+          if (node.cmd === "overline" || node.cmd === "bar") {
+            return '<m:bar><m:barPr><m:pos m:val="top"/></m:barPr><m:e>' + bodyXml + "</m:e></m:bar>";
+          }
+          if (node.cmd === "underline") {
+            return '<m:bar><m:barPr><m:pos m:val="bot"/></m:barPr><m:e>' + bodyXml + "</m:e></m:bar>";
+          }
+          const accChr =
+            node.cmd === "vec" || node.cmd === "overrightarrow"
+              ? "\u20D7"
+              : node.cmd === "tilde" || node.cmd === "widetilde"
+                ? "\u0303"
+                : node.cmd === "dot"
+                  ? "\u0307"
+                  : node.cmd === "ddot"
+                    ? "\u0308"
+                    : "\u0302";
+          return (
+            "<m:acc>" +
+              '<m:accPr><m:chr m:val="' + escapeXml(accChr) + '"/></m:accPr>' +
+              "<m:e>" + bodyXml + "</m:e>" +
+            "</m:acc>"
+          );
+        }
+
+        case "env": {
+          const rowsXml = (node.rows || [])
+            .map(
+              (row) =>
+                "<m:mr>" +
+                  row.map((cell) => "<m:e>" + astNodesToOmml(cell) + "</m:e>").join("") +
+                "</m:mr>"
+            )
+            .join("");
+          const matXml = "<m:m>" + rowsXml + "</m:m>";
+          if (node.env === "cases") {
+            return '<m:d><m:dPr><m:begChr m:val="{"/><m:endChr m:val=""/></m:dPr><m:e>' + matXml + "</m:e></m:d>";
+          }
+          if (node.env === "pmatrix") {
+            return '<m:d><m:dPr><m:begChr m:val="("/><m:endChr m:val=")"/></m:dPr><m:e>' + matXml + "</m:e></m:d>";
+          }
+          if (node.env === "bmatrix") {
+            return '<m:d><m:dPr><m:begChr m:val="["/><m:endChr m:val="]"/></m:dPr><m:e>' + matXml + "</m:e></m:d>";
+          }
+          return matXml;
+        }
+
+        default:
+          return "";
+      }
+    }
+
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      const next = nodes[i + 1];
+
+      // Gắn chỉ số trên (^) và chỉ số dưới (_) liền sau phần tử cơ sở thành <m:sSup>/<m:sSub>/<m:sSubSup>
+      if (next && next.kind === "script" && node.kind !== "nary" && node.kind !== "lim") {
+        const baseXml = convertSingleNode(node);
+        const subXml = next.sub ? astNodesToOmml(next.sub) : "";
+        const supXml = next.sup ? astNodesToOmml(next.sup) : "";
+        if (subXml && supXml) {
+          out +=
+            "<m:sSubSup>" +
+              "<m:e>" + baseXml + "</m:e>" +
+              "<m:sub>" + subXml + "</m:sub>" +
+              "<m:sup>" + supXml + "</m:sup>" +
+            "</m:sSubSup>";
+        } else if (supXml) {
+          out +=
+            "<m:sSup>" +
+              "<m:e>" + baseXml + "</m:e>" +
+              "<m:sup>" + supXml + "</m:sup>" +
+            "</m:sSup>";
+        } else if (subXml) {
+          out +=
+            "<m:sSub>" +
+              "<m:e>" + baseXml + "</m:e>" +
+              "<m:sub>" + subXml + "</m:sub>" +
+            "</m:sSub>";
+        } else {
+          out += baseXml;
+        }
+        i += 1;
+        continue;
+      }
+
+      out += convertSingleNode(node);
+    }
+
+    return out;
+  }
+
+  function fallbackLatexToOmml(latex) {
+    const clean = stripOuterDelimiters(latex);
+    if (!clean) {
+      throw new Error("Nội dung công thức LaTeX đang trống.");
+    }
+    const ast = parseLatexToAst(clean);
+    const innerXml = astNodesToOmml(ast);
+    if (!innerXml) {
+      throw new Error("Bộ dịch dự phòng không tạo được nội dung OMML.");
+    }
+    return "<m:oMath>" + innerXml + "</m:oMath>";
+  }
+
+  window.fallbackLatexToOmml = fallbackLatexToOmml;
+
   function latexToWordOoxml(latex, displayMode) {
-    const mathml = renderLatexToMathML(latex, displayMode);
-    const oMath = mathmlToOmml(mathml);
-    return buildWordOoxml(oMath, displayMode);
+    const clean = stripOuterDelimiters(latex);
+    if (!clean) {
+      throw new Error("Nội dung công thức LaTeX đang trống.");
+    }
+
+    try {
+      const mathml = renderLatexToMathML(clean, displayMode);
+      const oMath = mathmlToOmml(mathml);
+      return buildWordOoxml(oMath, displayMode);
+    } catch (temmlErr) {
+      // Nếu công thức thiếu/thừa ngoặc nhọn thì giữ nguyên lỗi cú pháp để báo đỏ tại chỗ
+      if (!hasBalancedLatexBraces(clean)) {
+        throw temmlErr;
+      }
+      // Dự phòng bằng bộ dịch LaTeX -> OMML thuần JS khi gặp cú pháp đặc biệt mà Temml báo lỗi
+      try {
+        const fallbackOmath = fallbackLatexToOmml(clean);
+        if (fallbackOmath) {
+          return buildWordOoxml(fallbackOmath, displayMode);
+        }
+      } catch (_fallbackErr) {
+        // Giữ lỗi gốc để hiển thị rõ cho người dùng
+      }
+      throw temmlErr;
+    }
   }
 
   /* ------------------------------------------------------------------------
@@ -1468,15 +1667,6 @@
       return;
     }
 
-    if (typeof temml === "undefined") {
-      showStatus("Đang chờ thư viện Temml tải xong...", "info");
-      const ready = await waitForTemml();
-      if (!ready) {
-        showStatus("Không thể tải thư viện Temml. Vui lòng kiểm tra kết nối mạng.", "error");
-        return;
-      }
-    }
-
     state.cancelRequested = false;
     setBusy(true, true);
     renderErrorReport([]);
@@ -1768,13 +1958,6 @@
 
     setBusy(true);
     try {
-      if (typeof temml === "undefined") {
-        showStatus("Đang chờ thư viện Temml tải xong...", "info");
-        const ready = await waitForTemml();
-        if (!ready) {
-          throw new Error("Không thể tải thư viện Temml từ jsDelivr/unpkg.");
-        }
-      }
       const ooxml = latexToWordOoxml(latex, displayMode);
 
       await Word.run(async (context) => {

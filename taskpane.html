@@ -9,13 +9,6 @@
   <!-- Office.js chính thức từ Microsoft CDN -->
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 
-  <!-- CSS chính thức của Temml 0.10.28 (ưu tiên jsDelivr, dự phòng unpkg) -->
-  <link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/temml@0.10.28/dist/Temml-Local.css"
-    onerror="this.onerror=null;this.href='https://unpkg.com/temml@0.10.28/dist/Temml-Local.css';"
-  />
-
   <style>
     :root {
       --bg-canvas: #f5f6f8;
@@ -1133,33 +1126,8 @@
     </footer>
   </div>
 
-  <!-- Thư viện Temml 0.10.28 đặt trước taskpane.js, tự động dự phòng unpkg nếu jsDelivr lỗi hoặc chậm -->
-  <script>
-    (function () {
-      var fallbackLoaded = false;
-      window.__loadTemmlFallback = function () {
-        if (fallbackLoaded || typeof window.temml !== "undefined") return;
-        fallbackLoaded = true;
-        var s = document.createElement("script");
-        s.src = "https://unpkg.com/temml@0.10.28/dist/temml.min.js";
-        s.async = false;
-        document.head.appendChild(s);
-      };
-    })();
-  </script>
-  <script
-    src="https://cdn.jsdelivr.net/npm/temml@0.10.28/dist/temml.min.js"
-    onerror="window.__loadTemmlFallback && window.__loadTemmlFallback()"
-  ></script>
-  <script>
-    if (typeof window.temml === "undefined") {
-      setTimeout(function () {
-        if (typeof window.temml === "undefined" && typeof window.__loadTemmlFallback === "function") {
-          window.__loadTemmlFallback();
-        }
-      }, 2500);
-    }
-  </script>
-  <script src="taskpane.js"></script>
+  <link rel="stylesheet" href="./Temml-local.css">
+  <script src="./temml.min.js"></script>
+  <script src="./taskpane.js"></script>
 </body>
 </html>
