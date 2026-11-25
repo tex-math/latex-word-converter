@@ -9,7 +9,7 @@
   <!-- Office.js chính thức từ Microsoft CDN -->
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 
-  <!-- Thư viện Temml nhẹ (LaTeX -> MathML chuẩn trình duyệt & OMML) -->
+  <!-- Thư viện Temml CDN nhẹ (chuyển LaTeX -> MathML chuẩn & xem trước trực tiếp) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/temml@0.11.17/dist/temml.min.css" />
   <script
     src="https://cdn.jsdelivr.net/npm/temml@0.11.17/dist/temml.min.js"
@@ -24,7 +24,7 @@
       --border: #d8dee6;
       --border-strong: #bcc6d4;
       --text-primary: #1b222c;
-      --text-secondary: #526071;
+      --text-secondary: #4e5d6f;
       --text-muted: #6b7888;
       --accent: #185abd;
       --accent-hover: #12489a;
@@ -68,7 +68,7 @@
       width: 100%;
     }
 
-    /* Thanh tiêu đề tối ưu cho chiều rộng 300px-350px */
+    /* Thanh tiêu đề tối ưu chiều rộng hẹp 300px-350px */
     .app-header {
       background: var(--bg-surface);
       border-bottom: 1px solid var(--border);
@@ -104,11 +104,11 @@
       flex-shrink: 0;
     }
 
-    /* Điều hướng 3 tab dạng phân đoạn */
+    /* Điều hướng 2 tab chính gọn gàng ở đầu Task Pane */
     .tab-bar {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 3px;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
       background: var(--bg-subtle);
       padding: 3px;
       border-radius: var(--radius);
@@ -120,9 +120,9 @@
       background: transparent;
       color: var(--text-secondary);
       font-family: inherit;
-      font-size: 11.5px;
+      font-size: 12px;
       font-weight: 600;
-      padding: 6px 3px;
+      padding: 6px 6px;
       border-radius: 4px;
       cursor: pointer;
       white-space: nowrap;
@@ -141,7 +141,53 @@
       box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
     }
 
-    /* Nội dung chính */
+    /* Thanh công cụ phụ bên trong tab Chuyển đổi */
+    .sub-tab-bar {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 3px;
+      background: var(--bg-subtle);
+      padding: 3px;
+      border-radius: var(--radius);
+    }
+
+    .sub-tab-btn {
+      appearance: none;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 5px 3px;
+      border-radius: 4px;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: background 0.12s ease, color 0.12s ease;
+    }
+
+    .sub-tab-btn:hover {
+      color: var(--text-primary);
+    }
+
+    .sub-tab-btn.active {
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+    }
+
+    .sub-panel {
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .sub-panel.active {
+      display: flex;
+    }
+
     .app-main {
       flex: 1;
       padding: 10px 12px 12px;
@@ -183,6 +229,12 @@
       color: var(--text-primary);
     }
 
+    .hint-text {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin: 0;
+    }
+
     .text-link-btn {
       appearance: none;
       border: none;
@@ -201,7 +253,7 @@
       background: var(--accent-soft);
     }
 
-    /* Chuyển đổi chế độ Inline / Display */
+    /* Chuyển đổi chế độ phạm vi / inline-display */
     .mode-switch {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -219,12 +271,13 @@
       font-family: inherit;
       font-size: 11.5px;
       font-weight: 600;
-      padding: 5px 4px;
+      padding: 6px 4px;
       border-radius: 4px;
       cursor: pointer;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      transition: background 0.12s ease, color 0.12s ease;
     }
 
     .mode-btn.active {
@@ -233,85 +286,33 @@
       box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
     }
 
-    /* Bảng phím tắt ký hiệu LaTeX (6 cột x 2 hàng) */
-    .symbol-grid {
-      display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      gap: 4px;
+    .option-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
     }
 
-    .sym-btn {
-      appearance: none;
-      border: 1px solid var(--border);
-      background: var(--bg-canvas);
-      color: var(--text-primary);
-      font-family: var(--font-sans);
+    .check-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 7px;
       font-size: 12px;
-      font-weight: 500;
-      height: 28px;
-      padding: 0 2px;
-      border-radius: 4px;
+      color: var(--text-primary);
       cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: border-color 0.12s ease, background 0.12s ease;
     }
 
-    .sym-btn:hover {
-      border-color: var(--accent);
-      background: var(--accent-soft);
-      color: var(--accent);
+    .check-item input {
+      margin-top: 2px;
+      accent-color: var(--accent);
+      flex-shrink: 0;
     }
 
-    /* Ô nhập LaTeX */
-    .latex-textarea {
-      width: 100%;
-      min-height: 86px;
-      resize: vertical;
-      border: 1px solid var(--border-strong);
-      border-radius: var(--radius);
-      padding: 8px;
+    .code-inline {
       font-family: var(--font-mono);
-      font-size: 12px;
-      line-height: 1.5;
-      color: var(--text-primary);
-      background: var(--bg-surface);
-      outline: none;
-    }
-
-    .latex-textarea:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 2px rgba(24, 90, 189, 0.14);
-    }
-
-    /* Khung xem trước công thức trực tiếp */
-    .preview-box {
-      min-height: 62px;
-      max-height: 148px;
-      overflow: auto;
-      padding: 10px 8px;
-      border: 1px dashed var(--border-strong);
-      border-radius: var(--radius);
-      background: #fafbfd;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      font-size: 15px;
-    }
-
-    .preview-placeholder {
-      font-size: 12px;
-      color: var(--text-muted);
-    }
-
-    .preview-error {
-      font-size: 11.5px;
-      color: var(--error-text);
-      font-family: var(--font-mono);
-      text-align: left;
-      word-break: break-word;
+      font-size: 11px;
+      background: var(--bg-subtle);
+      padding: 1px 4px;
+      border-radius: 3px;
     }
 
     /* Nút hành động */
@@ -360,56 +361,98 @@
       background: var(--bg-subtle);
     }
 
+    .btn-orange {
+      background: #ea580c;
+      color: #ffffff;
+      width: 100%;
+    }
+
+    .btn-orange:hover:not(:disabled) {
+      background: #c2410c;
+    }
+
+    .btn-danger-outline {
+      background: var(--error-bg);
+      color: var(--error-text);
+      border-color: var(--error-border);
+      width: 100%;
+    }
+
+    .btn-danger-outline:hover:not(:disabled) {
+      background: #fee2e2;
+    }
+
     .btn-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 6px;
     }
 
-    /* Tùy chọn Radio & Checkbox cho Tab Quét */
-    .option-list {
+    .mt-size-row {
       display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .mt-size-select {
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 8px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .mt-size-select:focus {
+      border-color: #ea580c;
+      box-shadow: 0 0 0 2px rgba(234, 88, 12, 0.16);
+    }
+
+    /* Khối tiến trình thời gian thực */
+    .progress-card {
+      display: none;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px;
       flex-direction: column;
       gap: 6px;
     }
 
-    .check-item {
+    .progress-card.visible {
       display: flex;
-      align-items: flex-start;
-      gap: 7px;
+    }
+
+    .progress-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+
+    .progress-text {
       font-size: 12px;
+      font-weight: 600;
       color: var(--text-primary);
-      cursor: pointer;
+      font-variant-numeric: tabular-nums;
     }
 
-    .check-item input {
-      margin-top: 2px;
-      accent-color: var(--accent);
-      flex-shrink: 0;
-    }
-
-    .code-inline {
-      font-family: var(--font-mono);
-      font-size: 11px;
-      background: var(--bg-subtle);
-      padding: 1px 4px;
-      border-radius: 3px;
-    }
-
-    /* Thanh tiến độ */
-    .progress-wrap {
-      display: none;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .progress-wrap.visible {
-      display: flex;
+    .progress-pct {
+      font-size: 11.5px;
+      font-weight: 700;
+      color: var(--accent);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
     }
 
     .progress-track {
       width: 100%;
-      height: 6px;
+      height: 7px;
       background: var(--bg-subtle);
       border-radius: 99px;
       overflow: hidden;
@@ -419,16 +462,30 @@
       height: 100%;
       width: 0%;
       background: var(--accent);
-      transition: width 0.15s ease;
+      transition: width 0.12s ease;
     }
 
-    .progress-text {
+    .progress-stats {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
       font-size: 11px;
       color: var(--text-secondary);
       font-variant-numeric: tabular-nums;
     }
 
-    /* Danh sách kết quả quét & mẫu */
+    .stat-ok {
+      color: var(--success-text);
+      font-weight: 600;
+    }
+
+    .stat-err {
+      color: var(--error-text);
+      font-weight: 600;
+    }
+
+    /* Danh sách kết quả quét, lỗi cú pháp, mẫu & lịch sử */
     .item-list {
       display: flex;
       flex-direction: column;
@@ -447,6 +504,11 @@
       gap: 4px;
     }
 
+    .list-item.is-error {
+      border-color: var(--error-border);
+      background: var(--error-bg);
+    }
+
     .list-item-head {
       display: flex;
       align-items: center;
@@ -463,6 +525,10 @@
       white-space: nowrap;
     }
 
+    .list-item.is-error .list-item-title {
+      color: var(--error-text);
+    }
+
     .list-item-meta {
       font-size: 11px;
       color: var(--text-muted);
@@ -477,6 +543,12 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    .list-item-err-msg {
+      font-size: 11px;
+      color: var(--error-text);
+      word-break: break-word;
     }
 
     .list-item-actions {
@@ -515,14 +587,93 @@
       color: #ffffff;
     }
 
+    /* Bảng phím tắt ký hiệu LaTeX (6 cột x 2 hàng) */
+    .symbol-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 4px;
+    }
+
+    .sym-btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--bg-canvas);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 500;
+      height: 28px;
+      padding: 0 2px;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: border-color 0.12s ease, background 0.12s ease;
+    }
+
+    .sym-btn:hover {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .latex-textarea {
+      width: 100%;
+      min-height: 84px;
+      resize: vertical;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius);
+      padding: 8px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text-primary);
+      background: var(--bg-surface);
+      outline: none;
+    }
+
+    .latex-textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(24, 90, 189, 0.14);
+    }
+
+    .preview-box {
+      min-height: 62px;
+      max-height: 148px;
+      overflow: auto;
+      padding: 10px 8px;
+      border: 1px dashed var(--border-strong);
+      border-radius: var(--radius);
+      background: #fafbfd;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 15px;
+    }
+
+    .preview-placeholder {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .preview-error {
+      font-size: 11.5px;
+      color: var(--error-text);
+      font-family: var(--font-mono);
+      text-align: left;
+      word-break: break-word;
+    }
+
     .empty-note {
       font-size: 12px;
       color: var(--text-muted);
       text-align: center;
-      padding: 12px 6px;
+      padding: 10px 6px;
     }
 
-    /* Thanh thông báo trạng thái cuối trang */
+    /* Thanh thông báo trạng thái */
     .status-bar {
       margin: 0 12px 12px;
       padding: 8px 10px;
@@ -557,10 +708,144 @@
       border-color: var(--error-border);
     }
 
-    .hint-text {
-      font-size: 11px;
-      color: var(--text-muted);
+    /* Thẻ giới thiệu tác giả (Author Card) & Hướng dẫn nhanh */
+    .author-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+    }
+
+    .author-banner {
+      background: linear-gradient(135deg, #185abd 0%, #1e3a8a 100%);
+      color: #ffffff;
+      padding: 14px 12px 12px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+    }
+
+    .author-emblem {
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.16);
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: 700;
+      font-family: Georgia, "Times New Roman", serif;
+      flex-shrink: 0;
+    }
+
+    .author-banner-text {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .author-app-name {
       margin: 0;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.35;
+      color: #ffffff;
+    }
+
+    .author-version {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.85);
+      font-weight: 500;
+    }
+
+    .author-body {
+      padding: 10px 12px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+    }
+
+    .author-info-row {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--bg-subtle);
+    }
+
+    .author-info-row:last-of-type {
+      border-bottom: none;
+      padding-bottom: 2px;
+    }
+
+    .author-info-label {
+      font-size: 10.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+    }
+
+    .author-info-value {
+      font-size: 12.5px;
+      color: var(--text-primary);
+      line-height: 1.45;
+    }
+
+    .author-info-value strong {
+      color: #0f172a;
+      font-weight: 700;
+    }
+
+    .author-link-btn {
+      text-decoration: none;
+      margin-top: 2px;
+    }
+
+    .author-url-note {
+      margin: 0;
+      text-align: center;
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      color: var(--text-muted);
+      word-break: break-all;
+    }
+
+    .guide-list {
+      margin: 0;
+      padding-left: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      line-height: 1.45;
+    }
+
+    .guide-list strong {
+      color: var(--text-primary);
+    }
+
+    /* Thanh chân trang cố định xuyên suốt dưới đáy Task Pane */
+    .app-footer {
+      position: sticky;
+      bottom: 0;
+      z-index: 9;
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border);
+      padding: 7px 10px;
+      text-align: center;
+      font-size: 11px;
+      color: var(--text-secondary);
+      line-height: 1.35;
+    }
+
+    .hidden {
+      display: none !important;
     }
   </style>
 </head>
@@ -571,23 +856,141 @@
         <h1 class="app-title">Chuyển đổi LaTeX Word</h1>
         <span id="hostIndicator" class="host-note">Đang kết nối...</span>
       </div>
-      <nav class="tab-bar" role="tablist" aria-label="Chức năng chính">
-        <button class="tab-btn active" role="tab" aria-selected="true" data-tab="editor">Soạn thảo</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-tab="batch">Quét văn bản</button>
-        <button class="tab-btn" role="tab" aria-selected="false" data-tab="library">Mẫu &amp; Lịch sử</button>
+      <nav class="tab-bar" role="tablist" aria-label="Điều hướng chính">
+        <button type="button" class="tab-btn active" role="tab" aria-selected="true" data-tab="convert">Chuyển đổi</button>
+        <button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="about">Giới thiệu</button>
       </nav>
     </header>
 
     <main class="app-main">
-      <!-- TAB 1: SOẠN THẢO CÔNG THỨC -->
-      <section id="panel-editor" class="tab-panel active" role="tabpanel">
+      <!-- TAB 1: CHUYỂN ĐỔI CÔNG THỨC (LaTeX ⇄ Word Equation ⇄ MathType) -->
+      <section id="panel-convert" class="tab-panel active" role="tabpanel">
+        <div class="sub-tab-bar" role="tablist" aria-label="Chế độ công cụ chuyển đổi">
+          <button type="button" class="sub-tab-btn active" role="tab" aria-selected="true" data-subtab="batch">Hàng loạt</button>
+          <button type="button" class="sub-tab-btn" role="tab" aria-selected="false" data-subtab="editor">Soạn công thức</button>
+          <button type="button" class="sub-tab-btn" role="tab" aria-selected="false" data-subtab="library">Mẫu &amp; Lịch sử</button>
+        </div>
+
+        <!-- MỤC CON 1: CHUYỂN ĐỔI HÀNG LOẠT LATEX ⇄ WORD ⇄ MATHTYPE -->
+        <div id="subpanel-batch" class="sub-panel active">
+        <div class="section-card">
+          <span class="field-label">Phạm vi chuyển đổi</span>
+          <div class="mode-switch" role="group" aria-label="Chọn phạm vi chuyển đổi">
+            <button type="button" class="mode-btn active" data-scope="selection">Vùng bôi đen</button>
+            <button type="button" class="mode-btn" data-scope="body">Toàn bộ tài liệu</button>
+          </div>
+          <p id="scopeHint" class="hint-text">
+            Tự động chuyển sang toàn bộ tài liệu nếu bạn không bôi đen đoạn văn nào.
+          </p>
+        </div>
+
+        <div class="section-card">
+          <span class="field-label">Cú pháp nhận diện LaTeX</span>
+          <div class="option-list">
+            <label class="check-item">
+              <input type="checkbox" id="optInlineDollar" checked />
+              <span>Cùng dòng <span class="code-inline">$...$</span> và <span class="code-inline">\(...\)</span></span>
+            </label>
+            <label class="check-item">
+              <input type="checkbox" id="optDisplayBlock" checked />
+              <span>Đứng riêng dòng <span class="code-inline">$$...$$</span> và <span class="code-inline">\[...\]</span></span>
+            </label>
+            <label class="check-item">
+              <input type="checkbox" id="optSkipCurrency" checked />
+              <span>Bỏ qua số tiền tệ (ví dụ: $50, $100)</span>
+            </label>
+            <label class="check-item">
+              <input type="checkbox" id="optHighlightError" checked />
+              <span>Tô màu đỏ cảnh báo tại chỗ nếu công thức lỗi cú pháp</span>
+            </label>
+          </div>
+        </div>
+
+        <button type="button" id="btnBatchConvert" class="btn btn-primary">
+          Chuyển LaTeX → Word Equation
+        </button>
+
+        <div class="btn-row">
+          <button type="button" id="btnScanPreview" class="btn btn-secondary">
+            Quét kiểm tra
+          </button>
+          <button type="button" id="btnBatchReverse" class="btn btn-secondary">
+            Word → LaTeX
+          </button>
+        </div>
+
+        <div class="section-card">
+          <div class="mt-size-row">
+            <label for="optMathTypeFontSize" class="field-label">MathType (Equation.DSMT4)</label>
+            <select id="optMathTypeFontSize" class="mt-size-select" aria-label="Cỡ chữ mặc định MathType">
+              <option value="10">10pt</option>
+              <option value="11">11pt</option>
+              <option value="12" selected>12pt</option>
+              <option value="13">13pt</option>
+              <option value="14">14pt</option>
+              <option value="16">16pt</option>
+            </select>
+          </div>
+          <button type="button" id="btnLatexToMathType" class="btn btn-orange">
+            Đổi tất cả $...$ sang MathType
+          </button>
+          <button type="button" id="btnConvertMathType" class="btn btn-secondary">
+            MathType (OLE) → LaTeX $...$
+          </button>
+        </div>
+
+        <button type="button" id="btnCancelBatch" class="btn btn-danger-outline hidden">
+          Dừng chuyển đổi
+        </button>
+
+        <!-- Canvas ẩn dùng vẽ ảnh xem trước PNG cho đối tượng MathType -->
+        <canvas id="mtPreviewCanvas" class="hidden" aria-hidden="true"></canvas>
+
+        <!-- Thanh tiến trình & bộ đếm thời gian thực -->
+        <div id="batchProgressCard" class="progress-card" aria-live="polite">
+          <div class="progress-header">
+            <span id="batchProgressText" class="progress-text">Đang xử lý 0/0 công thức...</span>
+            <span id="batchProgressPct" class="progress-pct">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="batchProgressFill" class="progress-fill"></div>
+          </div>
+          <div class="progress-stats">
+            <span>Thành công: <span id="statSuccessCount" class="stat-ok">0</span></span>
+            <span>Lỗi (bỏ qua): <span id="statErrorCount" class="stat-err">0</span></span>
+          </div>
+        </div>
+
+        <!-- Danh sách công thức lỗi cú pháp (nếu có) -->
+        <div id="errorReportCard" class="section-card hidden">
+          <div class="section-row">
+            <span class="field-label" style="color: var(--error-text);">Công thức lỗi cú pháp (đã tô đỏ)</span>
+            <span id="errorCountLabel" class="list-item-meta">0 lỗi</span>
+          </div>
+          <div id="errorReportList" class="item-list"></div>
+        </div>
+
+        <!-- Danh sách kết quả quét kiểm tra -->
+        <div class="section-card">
+          <div class="section-row">
+            <span class="field-label">Danh sách công thức phát hiện</span>
+            <span id="scanCountLabel" class="list-item-meta">Chưa quét</span>
+          </div>
+          <div id="scanResultsList" class="item-list">
+            <div class="empty-note">Nhấn "Quét kiểm tra" hoặc "Chuyển LaTeX → Word Equation" để bắt đầu.</div>
+          </div>
+        </div>
+        </div>
+
+        <!-- MỤC CON 2: SOẠN THẢO & CHÈN TẠI CON TRỎ -->
+        <div id="subpanel-editor" class="sub-panel">
         <div class="section-card">
           <div class="section-row">
             <span class="field-label">Kiểu hiển thị trong Word</span>
           </div>
           <div class="mode-switch" role="group" aria-label="Chế độ công thức">
             <button type="button" class="mode-btn active" data-mode="inline">Cùng dòng ($...$)</button>
-            <button type="button" class="mode-btn" data-mode="display">Dòng riêng ($$...$$)</button>
+            <button type="button" class="mode-btn" data-mode="display">Riêng dòng ($$...$$)</button>
           </div>
         </div>
 
@@ -620,12 +1023,12 @@
             spellcheck="false"
             placeholder="Nhập LaTeX, ví dụ: x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"
           >x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}</textarea>
-          <p class="hint-text">Mẹo: Nhấn Ctrl + Enter để chèn nhanh công thức tại con trỏ Word.</p>
+          <p class="hint-text">Mẹo: Nhấn Ctrl + Enter để chèn nhanh công thức tại vị trí con trỏ Word.</p>
         </div>
 
         <div class="section-card">
           <div class="section-row">
-            <span class="field-label">Xem trước trực tiếp</span>
+            <span class="field-label">Xem trước trực tiếp (Temml)</span>
             <button type="button" id="btnCopyMathml" class="text-link-btn">Chép MathML</button>
           </div>
           <div id="mathPreview" class="preview-box" aria-live="polite">
@@ -645,75 +1048,10 @@
             Chèn dạng $...$
           </button>
         </div>
-      </section>
-
-      <!-- TAB 2: QUÉT & CHUYỂN ĐỔI HÀNG LOẠT -->
-      <section id="panel-batch" class="tab-panel" role="tabpanel">
-        <div class="section-card">
-          <span class="field-label">Phạm vi xử lý</span>
-          <div class="option-list">
-            <label class="check-item">
-              <input type="radio" name="scanScope" value="selection" />
-              <span>Chỉ vùng văn bản đang bôi đen</span>
-            </label>
-            <label class="check-item">
-              <input type="radio" name="scanScope" value="body" checked />
-              <span>Toàn bộ nội dung tài liệu</span>
-            </label>
-          </div>
         </div>
 
-        <div class="section-card">
-          <span class="field-label">Cú pháp nhận diện LaTeX</span>
-          <div class="option-list">
-            <label class="check-item">
-              <input type="checkbox" id="optDollar" checked />
-              <span>Dấu đô-la <span class="code-inline">$...$</span> và <span class="code-inline">$$...$$</span></span>
-            </label>
-            <label class="check-item">
-              <input type="checkbox" id="optBracket" checked />
-              <span>Dấu ngoặc <span class="code-inline">\(...\)</span> và <span class="code-inline">\[...\]</span></span>
-            </label>
-            <label class="check-item">
-              <input type="checkbox" id="optSkipCurrency" checked />
-              <span>Bỏ qua số tiền tệ (ví dụ: $50, $100)</span>
-            </label>
-          </div>
-        </div>
-
-        <div class="btn-row">
-          <button type="button" id="btnScanPreview" class="btn btn-secondary">
-            Quét kiểm tra
-          </button>
-          <button type="button" id="btnBatchConvert" class="btn btn-primary">
-            Đổi sang Word
-          </button>
-        </div>
-
-        <button type="button" id="btnBatchReverse" class="btn btn-secondary">
-          Đổi ngược Word Equation → LaTeX
-        </button>
-
-        <div id="batchProgressWrap" class="progress-wrap">
-          <div class="progress-track">
-            <div id="batchProgressFill" class="progress-fill"></div>
-          </div>
-          <span id="batchProgressText" class="progress-text">Đang xử lý 0/0...</span>
-        </div>
-
-        <div class="section-card">
-          <div class="section-row">
-            <span class="field-label">Kết quả quét</span>
-            <span id="scanCountLabel" class="list-item-meta">Chưa quét</span>
-          </div>
-          <div id="scanResultsList" class="item-list">
-            <div class="empty-note">Nhấn "Quét kiểm tra" để xem danh sách công thức LaTeX có trong văn bản.</div>
-          </div>
-        </div>
-      </section>
-
-      <!-- TAB 3: MẪU CÔNG THỨC & LỊCH SỬ -->
-      <section id="panel-library" class="tab-panel" role="tabpanel">
+        <!-- MỤC CON 3: MẪU CÔNG THỨC & LỊCH SỬ -->
+        <div id="subpanel-library" class="sub-panel">
         <div class="section-card">
           <div class="section-row">
             <span class="field-label">Công thức mẫu phổ biến</span>
@@ -728,13 +1066,71 @@
             <button type="button" id="btnClearHistory" class="text-link-btn">Xóa lịch sử</button>
           </div>
           <div id="historyList" class="item-list">
-            <div class="empty-note">Chưa có công thức nào được chèn trong phiên làm việc này.</div>
+            <div class="empty-note">Chưa có công thức nào được chèn gần đây.</div>
           </div>
+        </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: GIỚI THIỆU TÁC GIẢ & HƯỚNG DẪN NHANH -->
+      <section id="panel-about" class="tab-panel" role="tabpanel">
+        <article class="author-card" aria-label="Thông tin tác giả và tiện ích">
+          <div class="author-banner">
+            <div class="author-emblem" aria-hidden="true">∑</div>
+            <div class="author-banner-text">
+              <h2 class="author-app-name">Công cụ Chuyển đổi Công thức Toán (LaTeX ⇄ Word ⇄ MathType)</h2>
+              <span class="author-version">Phiên bản 1.0</span>
+            </div>
+          </div>
+
+          <div class="author-body">
+            <div class="author-info-row">
+              <span class="author-info-label">Tác giả</span>
+              <span class="author-info-value">Thầy giáo <strong>Lê Hậu Phước</strong></span>
+            </div>
+
+            <div class="author-info-row">
+              <span class="author-info-label">Đơn vị công tác</span>
+              <span class="author-info-value">Trường THPT Hoá Châu – Thành phố Huế</span>
+            </div>
+
+            <div class="author-info-row">
+              <span class="author-info-label">Mô tả mục đích</span>
+              <span class="author-info-value">
+                Tiện ích hỗ trợ giáo viên Toán chuẩn hóa và chuyển đổi nhanh hàng loạt công thức toán học trong soạn thảo giáo án, đề kiểm tra trên Microsoft Word.
+              </span>
+            </div>
+
+            <a
+              id="btnOpenProjectHome"
+              class="btn btn-primary author-link-btn"
+              href="https://tex-math.github.io/latex-word-converter/"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Mở trang chủ &amp; mã nguồn dự án
+            </a>
+            <p class="author-url-note">https://tex-math.github.io/latex-word-converter/</p>
+          </div>
+        </article>
+
+        <div class="section-card">
+          <span class="field-label">Hướng dẫn sử dụng nhanh</span>
+          <ol class="guide-list">
+            <li><strong>LaTeX → Word Equation:</strong> Bôi đen đoạn văn (hoặc để trống để quét toàn bài), rồi bấm nút xanh để đổi <span class="code-inline">$...$</span> và <span class="code-inline">$$...$$</span> sang Equation OMML.</li>
+            <li><strong>LaTeX → MathType:</strong> Chọn cỡ chữ mặc định (vd: <span class="code-inline">12pt</span>) rồi bấm nút màu cam để tạo đối tượng <span class="code-inline">Equation.DSMT4</span> nhấp đúp sửa được bằng MathType.</li>
+            <li><strong>MathType → LaTeX:</strong> Giải mã trực tiếp các công thức MathType cũ sang <span class="code-inline">$...$</span> mà không cần cài MathType.</li>
+            <li><strong>Xử lý lỗi tự động:</strong> Công thức sai cú pháp sẽ được bỏ qua và tô đỏ tại chỗ để giáo viên dễ kiểm tra, không dừng giữa chừng.</li>
+          </ol>
         </div>
       </section>
     </main>
 
     <div id="statusBar" class="status-bar" role="status" aria-live="polite"></div>
+
+    <footer class="app-footer">
+      Phát triển bởi Lê Hậu Phước – THPT Hoá Châu, TP. Huế
+    </footer>
   </div>
 
   <script src="taskpane.js"></script>
