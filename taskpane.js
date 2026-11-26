@@ -451,19 +451,80 @@
   }
 
   /* ------------------------------------------------------------------------
-   * 2. TEMML CỤC BỘ (temml.render / temml.renderToString) & XEM TRƯỚC TRỰC TIẾP
+   * 2. TEMML CỤC BỘ (temml.render / temml.renderToString) & CHUẨN HÓA MATHML
    * ------------------------------------------------------------------------ */
+  const MATHML_XMLNS = "http://www.w3.org/1998/Math/MathML";
+  const OMML_CTRL_PR =
+    '<m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr></m:ctrlPr>';
+
+  const HTML_ENTITY_TO_NUMERIC = {
+    "&nbsp;": "&#160;",
+    "&ThinSpace;": "&#8201;",
+    "&MediumSpace;": "&#8287;",
+    "&ThickSpace;": "&#8197;",
+    "&ApplyFunction;": "&#8289;",
+    "&InvisibleTimes;": "&#8290;",
+    "&InvisibleComma;": "&#8291;",
+    "&minus;": "&#8722;",
+    "&times;": "&#215;",
+    "&middot;": "&#183;",
+    "&plusmn;": "&#177;",
+    "&le;": "&#8804;",
+    "&ge;": "&#8805;",
+    "&ne;": "&#8800;",
+    "&infin;": "&#8734;",
+    "&pi;": "&#960;"
+  };
+
+  /**
+   * Chuẩn hóa chuỗi MathML trước khi phân tích XML và đóng gói OOXML:
+   * - Đảm bảo thẻ <math> luôn có thuộc tính xmlns="http://www.w3.org/1998/Math/MathML".
+   * - Chuyển các HTML named entities (nếu có) sang numeric XML entities để DOMParser không lỗi.
+   * - Giữ nguyên vẹn cấu trúc các thẻ <msup>, <msub>, <msubsup> để Word dịch sang <m:sSup>
+   *   không bị rớt số mũ hoặc chỉ số.
+   */
+  function normalizeMathML(mathmlString) {
+    let xml = String(mathmlString || "").replace(/^\uFEFF/, "").trim();
+    if (!xml) {
+      throw new Error("Chuỗi MathML trả về từ Temml bị trống.");
+    }
+
+    // Thay thế các HTML named entity không thuộc 5 thực thể chuẩn XML
+    Object.keys(HTML_ENTITY_TO_NUMERIC).forEach((entity) => {
+      if (xml.indexOf(entity) !== -1) {
+        xml = xml.split(entity).join(HTML_ENTITY_TO_NUMERIC[entity]);
+      }
+    });
+
+    // Đảm bảo thẻ <math ...> luôn khai báo đúng xmlns="http://www.w3.org/1998/Math/MathML"
+    if (/<math\b/i.test(xml)) {
+      xml = xml.replace(/<math\b([^>]*)>/i, (fullMatch, attrs) => {
+        if (/\bxmlns\s*=\s*["'][^"']*["']/i.test(attrs)) {
+          return "<math" + attrs.replace(/\bxmlns\s*=\s*["'][^"']*["']/i, 'xmlns="' + MATHML_XMLNS + '"') + ">";
+        }
+        return '<math xmlns="' + MATHML_XMLNS + '"' + attrs + ">";
+      });
+    } else {
+      xml = '<math xmlns="' + MATHML_XMLNS + '">' + xml + "</math>";
+    }
+
+    return xml;
+  }
+
+  window.normalizeMathML = normalizeMathML;
+
   function renderLatexToMathML(latex, displayMode) {
     const clean = stripOuterDelimiters(latex);
     if (!clean) {
       throw new Error("Nội dung công thức LaTeX đang trống.");
     }
-    return temml.renderToString(clean, {
+    const rawMathML = temml.renderToString(clean, {
       displayMode: Boolean(displayMode),
       xml: true,
       throwOnError: true,
       annotate: false
     });
+    return normalizeMathML(rawMathML);
   }
 
   function stripOuterDelimiters(raw) {
@@ -499,12 +560,7 @@
         displayMode: Boolean(state.displayMode),
         throwOnError: true
       });
-      state.lastMathML = temml.renderToString(clean, {
-        displayMode: Boolean(state.displayMode),
-        xml: true,
-        throwOnError: true,
-        annotate: false
-      });
+      state.lastMathML = renderLatexToMathML(clean, state.displayMode);
     } catch (err) {
       state.lastMathML = "";
       dom.mathPreview.innerHTML = "";
@@ -528,9 +584,14 @@
       .replace(/'/g, "&apos;");
   }
 
-  function createOmmlRun(text, isNormal = false) {
+  function createOmmlRun(text, styleMode = false) {
     if (!text) return "";
-    const rPr = isNormal ? "<m:rPr><m:nor/></m:rPr>" : "";
+    let rPr = "";
+    if (styleMode === "normal") {
+      rPr = "<m:rPr><m:nor/></m:rPr>";
+    } else if (styleMode === true || styleMode === "plain") {
+      rPr = '<m:rPr><m:sty m:val="p"/></m:rPr>';
+    }
     const wRPr =
       '<w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr>';
     const needsPreserve = /^\s|\s$|\s{2,}/.test(text);
@@ -621,7 +682,7 @@
     }
     if (node.nodeType !== 1) return "";
 
-    const tag = node.localName;
+    const tag = (node.localName || node.nodeName || "").toLowerCase();
     const kids = Array.from(node.children);
 
     switch (tag) {
@@ -665,21 +726,23 @@
       case "mi": {
         const text = node.textContent || "";
         const variant = node.getAttribute("mathvariant");
-        const isNormal = variant === "normal" || text.length > 1;
-        return createOmmlRun(text, isNormal);
+        const isPlain = variant === "normal" || text.length > 1;
+        return createOmmlRun(text, isPlain ? "plain" : false);
       }
 
       case "mn":
+        return createOmmlRun(node.textContent || "", "plain");
+
       case "mtext":
-        return createOmmlRun(node.textContent || "", true);
+        return createOmmlRun(node.textContent || "", "normal");
 
       case "mo": {
         const text = node.textContent || "";
-        return text ? createOmmlRun(text, true) : "";
+        return text ? createOmmlRun(text, "plain") : "";
       }
 
       case "mspace":
-        return createOmmlRun(" ", true);
+        return createOmmlRun(" ", "plain");
 
       case "mfrac": {
         if (kids.length < 2) return convertChildrenList(kids);
@@ -718,10 +781,13 @@
 
       case "msup": {
         if (kids.length < 2) return convertChildrenList(kids);
+        const baseXml = convertMathNode(kids[0]) || createOmmlRun(" ", "plain");
+        const supXml = convertMathNode(kids[1]);
         return (
           "<m:sSup>" +
-            "<m:e>" + convertMathNode(kids[0]) + "</m:e>" +
-            "<m:sup>" + convertMathNode(kids[1]) + "</m:sup>" +
+            "<m:sSupPr>" + OMML_CTRL_PR + "</m:sSupPr>" +
+            "<m:e>" + baseXml + "</m:e>" +
+            "<m:sup>" + supXml + "</m:sup>" +
           "</m:sSup>"
         );
       }
@@ -736,23 +802,70 @@
             "</m:limLow>"
           );
         }
+        const baseXml = convertMathNode(kids[0]) || createOmmlRun(" ", "plain");
+        const subXml = convertMathNode(kids[1]);
         return (
           "<m:sSub>" +
-            "<m:e>" + convertMathNode(kids[0]) + "</m:e>" +
-            "<m:sub>" + convertMathNode(kids[1]) + "</m:sub>" +
+            "<m:sSubPr>" + OMML_CTRL_PR + "</m:sSubPr>" +
+            "<m:e>" + baseXml + "</m:e>" +
+            "<m:sub>" + subXml + "</m:sub>" +
           "</m:sSub>"
         );
       }
 
       case "msubsup": {
         if (kids.length < 3) return convertChildrenList(kids);
+        const baseXml = convertMathNode(kids[0]) || createOmmlRun(" ", "plain");
+        const subXml = convertMathNode(kids[1]);
+        const supXml = convertMathNode(kids[2]);
         return (
           "<m:sSubSup>" +
-            "<m:e>" + convertMathNode(kids[0]) + "</m:e>" +
-            "<m:sub>" + convertMathNode(kids[1]) + "</m:sub>" +
-            "<m:sup>" + convertMathNode(kids[2]) + "</m:sup>" +
+            "<m:sSubSupPr>" + OMML_CTRL_PR + "</m:sSubSupPr>" +
+            "<m:e>" + baseXml + "</m:e>" +
+            "<m:sub>" + subXml + "</m:sub>" +
+            "<m:sup>" + supXml + "</m:sup>" +
           "</m:sSubSup>"
         );
+      }
+
+      case "mmultiscripts": {
+        if (kids.length === 0) return "";
+        const baseXml = convertMathNode(kids[0]) || createOmmlRun(" ", "plain");
+        const postSub = kids[1] && kids[1].localName !== "none" && kids[1].localName !== "mprescripts"
+          ? convertMathNode(kids[1])
+          : "";
+        const postSup = kids[2] && kids[2].localName !== "none" && kids[2].localName !== "mprescripts"
+          ? convertMathNode(kids[2])
+          : "";
+        if (postSub && postSup) {
+          return (
+            "<m:sSubSup>" +
+              "<m:sSubSupPr>" + OMML_CTRL_PR + "</m:sSubSupPr>" +
+              "<m:e>" + baseXml + "</m:e>" +
+              "<m:sub>" + postSub + "</m:sub>" +
+              "<m:sup>" + postSup + "</m:sup>" +
+            "</m:sSubSup>"
+          );
+        }
+        if (postSup) {
+          return (
+            "<m:sSup>" +
+              "<m:sSupPr>" + OMML_CTRL_PR + "</m:sSupPr>" +
+              "<m:e>" + baseXml + "</m:e>" +
+              "<m:sup>" + postSup + "</m:sup>" +
+            "</m:sSup>"
+          );
+        }
+        if (postSub) {
+          return (
+            "<m:sSub>" +
+              "<m:sSubPr>" + OMML_CTRL_PR + "</m:sSubPr>" +
+              "<m:e>" + baseXml + "</m:e>" +
+              "<m:sub>" + postSub + "</m:sub>" +
+            "</m:sSub>"
+          );
+        }
+        return baseXml;
       }
 
       case "munder": {
@@ -882,8 +995,9 @@
   }
 
   function mathmlToOmml(mathmlString) {
+    const normalized = normalizeMathML(mathmlString);
     const parser = new DOMParser();
-    const doc = parser.parseFromString(mathmlString, "application/xml");
+    const doc = parser.parseFromString(normalized, "application/xml");
     if (doc.querySelector("parsererror")) {
       throw new Error("Không thể phân tích cú pháp MathML trả về từ Temml.");
     }
@@ -1002,7 +1116,8 @@
           if (subXml && supXml) {
             return (
               "<m:sSubSup>" +
-                "<m:e>" + createOmmlRun(" ", true) + "</m:e>" +
+                "<m:sSubSupPr>" + OMML_CTRL_PR + "</m:sSubSupPr>" +
+                "<m:e>" + createOmmlRun(" ", "plain") + "</m:e>" +
                 "<m:sub>" + subXml + "</m:sub>" +
                 "<m:sup>" + supXml + "</m:sup>" +
               "</m:sSubSup>"
@@ -1011,7 +1126,8 @@
           if (supXml) {
             return (
               "<m:sSup>" +
-                "<m:e>" + createOmmlRun(" ", true) + "</m:e>" +
+                "<m:sSupPr>" + OMML_CTRL_PR + "</m:sSupPr>" +
+                "<m:e>" + createOmmlRun(" ", "plain") + "</m:e>" +
                 "<m:sup>" + supXml + "</m:sup>" +
               "</m:sSup>"
             );
@@ -1019,7 +1135,8 @@
           if (subXml) {
             return (
               "<m:sSub>" +
-                "<m:e>" + createOmmlRun(" ", true) + "</m:e>" +
+                "<m:sSubPr>" + OMML_CTRL_PR + "</m:sSubPr>" +
+                "<m:e>" + createOmmlRun(" ", "plain") + "</m:e>" +
                 "<m:sub>" + subXml + "</m:sub>" +
               "</m:sSub>"
             );
@@ -1132,12 +1249,13 @@
 
       // Gắn chỉ số trên (^) và chỉ số dưới (_) liền sau phần tử cơ sở thành <m:sSup>/<m:sSub>/<m:sSubSup>
       if (next && next.kind === "script" && node.kind !== "nary" && node.kind !== "lim") {
-        const baseXml = convertSingleNode(node);
+        const baseXml = convertSingleNode(node) || createOmmlRun(" ", "plain");
         const subXml = next.sub ? astNodesToOmml(next.sub) : "";
         const supXml = next.sup ? astNodesToOmml(next.sup) : "";
         if (subXml && supXml) {
           out +=
             "<m:sSubSup>" +
+              "<m:sSubSupPr>" + OMML_CTRL_PR + "</m:sSubSupPr>" +
               "<m:e>" + baseXml + "</m:e>" +
               "<m:sub>" + subXml + "</m:sub>" +
               "<m:sup>" + supXml + "</m:sup>" +
@@ -1145,12 +1263,14 @@
         } else if (supXml) {
           out +=
             "<m:sSup>" +
+              "<m:sSupPr>" + OMML_CTRL_PR + "</m:sSupPr>" +
               "<m:e>" + baseXml + "</m:e>" +
               "<m:sup>" + supXml + "</m:sup>" +
             "</m:sSup>";
         } else if (subXml) {
           out +=
             "<m:sSub>" +
+              "<m:sSubPr>" + OMML_CTRL_PR + "</m:sSubPr>" +
               "<m:e>" + baseXml + "</m:e>" +
               "<m:sub>" + subXml + "</m:sub>" +
             "</m:sSub>";
@@ -1182,7 +1302,7 @@
 
   window.fallbackLatexToOmml = fallbackLatexToOmml;
 
-  function latexToWordOoxml(latex, displayMode) {
+  function latexToOmmlElement(latex, displayMode) {
     const clean = stripOuterDelimiters(latex);
     if (!clean) {
       throw new Error("Nội dung công thức LaTeX đang trống.");
@@ -1190,8 +1310,7 @@
 
     try {
       const mathml = renderLatexToMathML(clean, displayMode);
-      const oMath = mathmlToOmml(mathml);
-      return buildWordOoxml(oMath, displayMode);
+      return mathmlToOmml(mathml);
     } catch (temmlErr) {
       // Nếu công thức thiếu/thừa ngoặc nhọn thì giữ nguyên lỗi cú pháp để báo đỏ tại chỗ
       if (!hasBalancedLatexBraces(clean)) {
@@ -1201,13 +1320,18 @@
       try {
         const fallbackOmath = fallbackLatexToOmml(clean);
         if (fallbackOmath) {
-          return buildWordOoxml(fallbackOmath, displayMode);
+          return fallbackOmath;
         }
       } catch (_fallbackErr) {
         // Giữ lỗi gốc để hiển thị rõ cho người dùng
       }
       throw temmlErr;
     }
+  }
+
+  function latexToWordOoxml(latex, displayMode) {
+    const oMath = latexToOmmlElement(latex, displayMode);
+    return buildWordOoxml(oMath, displayMode);
   }
 
   /* ------------------------------------------------------------------------
@@ -1274,31 +1398,24 @@
         return deg ? "\\sqrt[" + deg + "]{" + e + "}" : "\\sqrt{" + e + "}";
       }
 
-      case "sSup":
-        return (
-          ommlNodeToLatex(getChildByLocalName(node, "e")).trim() +
-          "^{" +
-          ommlNodeToLatex(getChildByLocalName(node, "sup")).trim() +
-          "}"
-        );
+      case "sSup": {
+        const base = ommlNodeToLatex(getChildByLocalName(node, "e")).trim();
+        const sup = ommlNodeToLatex(getChildByLocalName(node, "sup")).trim();
+        return base + "^" + formatLatexScriptArg(sup);
+      }
 
-      case "sSub":
-        return (
-          ommlNodeToLatex(getChildByLocalName(node, "e")).trim() +
-          "_{" +
-          ommlNodeToLatex(getChildByLocalName(node, "sub")).trim() +
-          "}"
-        );
+      case "sSub": {
+        const base = ommlNodeToLatex(getChildByLocalName(node, "e")).trim();
+        const sub = ommlNodeToLatex(getChildByLocalName(node, "sub")).trim();
+        return base + "_" + formatLatexScriptArg(sub);
+      }
 
-      case "sSubSup":
-        return (
-          ommlNodeToLatex(getChildByLocalName(node, "e")).trim() +
-          "_{" +
-          ommlNodeToLatex(getChildByLocalName(node, "sub")).trim() +
-          "}^{" +
-          ommlNodeToLatex(getChildByLocalName(node, "sup")).trim() +
-          "}"
-        );
+      case "sSubSup": {
+        const base = ommlNodeToLatex(getChildByLocalName(node, "e")).trim();
+        const sub = ommlNodeToLatex(getChildByLocalName(node, "sub")).trim();
+        const sup = ommlNodeToLatex(getChildByLocalName(node, "sup")).trim();
+        return base + "_" + formatLatexScriptArg(sub) + "^" + formatLatexScriptArg(sup);
+      }
 
       case "nary": {
         const pr = getChildByLocalName(node, "naryPr");
@@ -1394,109 +1511,86 @@
     return { latex, isDisplay, count: mathNodes.length };
   }
 
+  function formatLatexScriptArg(str) {
+    const s = (str || "").trim();
+    if (!s) return "{}";
+    return /^[a-zA-Z0-9]$/.test(s) ? s : "{" + s + "}";
+  }
+
   /* ------------------------------------------------------------------------
-   * 5. BỘ TÁCH CÔNG THỨC LATEX ($...$, $$...$$, \(...\), \[...\])
+   * 5. BỘ TÁCH CÔNG THỨC LATEX BẰNG REGEX CHUẨN JS ($...$, $$...$$, \(...\), \[...\])
    * ------------------------------------------------------------------------ */
   function extractLatexMatches(text, options) {
     const matches = [];
     if (!text) return matches;
 
-    let i = 0;
-    const len = text.length;
+    const opts = options || { useInline: true, useDisplay: true, skipCurrency: true };
+    const useInline = opts.useInline !== false;
+    const useDisplay = opts.useDisplay !== false;
+    const skipCurrency = Boolean(opts.skipCurrency);
 
-    while (i < len) {
-      // Bỏ qua ký tự escape \$
-      if (text[i] === "\\" && i + 1 < len && text[i + 1] === "$") {
-        i += 2;
+    function isEscapedAt(str, idx) {
+      let backslashes = 0;
+      for (let k = idx - 1; k >= 0 && str[k] === "\\"; k--) {
+        backslashes += 1;
+      }
+      return backslashes % 2 === 1;
+    }
+
+    // 1. Dùng biểu thức chính quy chuẩn JS trích xuất chính xác $$...$$ và $...$ (bao gồm $2^x$, $a^{x+1}$, $x^{2n+1}$)
+    const dollarRegex = /\$\$([\s\S]+?)\$\$|\$([^\$]+?)\$/g;
+    let m;
+    while ((m = dollarRegex.exec(text)) !== null) {
+      const start = m.index;
+      const raw = m[0];
+      const end = start + raw.length;
+
+      // Bỏ qua ký tự thoát \$
+      if (isEscapedAt(text, start)) {
+        dollarRegex.lastIndex = start + 1;
         continue;
       }
 
-      // 1. Công thức đứng riêng dòng: $$...$$
-      if (options.useDisplay && text[i] === "$" && text[i + 1] === "$") {
-        const closeIdx = text.indexOf("$$", i + 2);
-        if (closeIdx !== -1) {
-          const inner = text.slice(i + 2, closeIdx).trim();
-          if (inner.length > 0) {
-            matches.push({
-              raw: text.slice(i, closeIdx + 2),
-              latex: inner,
-              displayMode: true
-            });
-            i = closeIdx + 2;
-            continue;
-          }
-        }
+      if (m[1] !== undefined) {
+        if (!useDisplay) continue;
+        const inner = m[1].trim();
+        if (!inner) continue;
+        matches.push({ raw, latex: inner, displayMode: true, start, end });
+      } else {
+        if (!useInline) continue;
+        if (isEscapedAt(text, end - 1)) continue;
+        const inner = (m[2] || "").trim();
+        if (!inner) continue;
+        const looksLikeCurrency = skipCurrency && /^\d[\d.,]*$/.test(inner);
+        if (looksLikeCurrency) continue;
+        matches.push({ raw, latex: inner, displayMode: false, start, end });
       }
-
-      // 2. Công thức cùng dòng: $...$
-      if (options.useInline && text[i] === "$" && text[i + 1] !== "$") {
-        if (i + 1 < len && !/\s/.test(text[i + 1])) {
-          let closeIdx = -1;
-          for (let j = i + 1; j < len; j++) {
-            if (text[j] === "\\" && j + 1 < len) {
-              j++;
-              continue;
-            }
-            if (text[j] === "$") {
-              closeIdx = j;
-              break;
-            }
-          }
-          if (closeIdx !== -1 && !/\s/.test(text[closeIdx - 1])) {
-            const inner = text.slice(i + 1, closeIdx).trim();
-            const looksLikeCurrency =
-              options.skipCurrency && /^\d[\d.,]*$/.test(inner);
-
-            if (inner.length > 0 && !looksLikeCurrency) {
-              matches.push({
-                raw: text.slice(i, closeIdx + 1),
-                latex: inner,
-                displayMode: false
-              });
-              i = closeIdx + 1;
-              continue;
-            }
-          }
-        }
-      }
-
-      // 3. Công thức đứng riêng dòng: \[...\]
-      if (options.useDisplay && text[i] === "\\" && text[i + 1] === "[") {
-        const closeIdx = text.indexOf("\\]", i + 2);
-        if (closeIdx !== -1) {
-          const inner = text.slice(i + 2, closeIdx).trim();
-          if (inner.length > 0) {
-            matches.push({
-              raw: text.slice(i, closeIdx + 2),
-              latex: inner,
-              displayMode: true
-            });
-            i = closeIdx + 2;
-            continue;
-          }
-        }
-      }
-
-      // 4. Công thức cùng dòng: \(...\)
-      if (options.useInline && text[i] === "\\" && text[i + 1] === "(") {
-        const closeIdx = text.indexOf("\\)", i + 2);
-        if (closeIdx !== -1) {
-          const inner = text.slice(i + 2, closeIdx).trim();
-          if (inner.length > 0) {
-            matches.push({
-              raw: text.slice(i, closeIdx + 2),
-              latex: inner,
-              displayMode: false
-            });
-            i = closeIdx + 2;
-            continue;
-          }
-        }
-      }
-
-      i++;
     }
 
+    // 2. Hỗ trợ thêm \[...\] và \(...\) không chồng lấn với các chuỗi $...$ đã tìm
+    const bracketRegex = /\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)/g;
+    while ((m = bracketRegex.exec(text)) !== null) {
+      const start = m.index;
+      const raw = m[0];
+      const end = start + raw.length;
+
+      const overlaps = matches.some((ex) => start < ex.end && end > ex.start);
+      if (overlaps) continue;
+
+      if (m[1] !== undefined) {
+        if (!useDisplay) continue;
+        const inner = m[1].trim();
+        if (!inner) continue;
+        matches.push({ raw, latex: inner, displayMode: true, start, end });
+      } else {
+        if (!useInline) continue;
+        const inner = (m[2] || "").trim();
+        if (!inner) continue;
+        matches.push({ raw, latex: inner, displayMode: false, start, end });
+      }
+    }
+
+    matches.sort((a, b) => a.start - b.start);
     return matches;
   }
 
@@ -1559,14 +1653,164 @@
   }
 
   /**
+   * Tìm chính xác một chuỗi văn bản trong đoạn Word bằng paragraph.search(..., { matchWildcards: false }).
+   * Đồng thời xử lý riêng đặc thù của Microsoft Word Desktop: khi chuỗi chứa dấu lũy thừa '^'
+   * (ví dụ $2^x$, $x^2$, $a^{x+1}$), Word Desktop có thể hiểu '^' là mã ký tự đặc biệt nên
+   * tự động thử lại bằng cách thoát '^' -> '^^' (vẫn tắt matchWildcards: false).
+   */
+  async function searchExactInParagraph(context, para, exactString) {
+    if (!exactString || exactString.length > WORD_SEARCH_MAX_LEN) {
+      return { items: [] };
+    }
+
+    // Lần 1: tìm chính xác nguyên văn với matchWildcards: false
+    try {
+      const results = para.search(exactString, {
+        matchCase: true,
+        matchWildcards: false
+      });
+      results.load("items");
+      await context.sync();
+      if (results.items && results.items.length > 0) {
+        return results;
+      }
+    } catch (_firstErr) {
+      // Một số phiên bản Word Desktop báo lỗi khi chuỗi chứa ^ (như ^x, ^2)
+    }
+
+    // Lần 2: nếu chuỗi chứa dấu lũy thừa '^', thoát '^' thành '^^' cho Word Desktop Find
+    if (exactString.indexOf("^") !== -1) {
+      const escapedCaret = exactString.replace(/\^/g, "^^");
+      if (escapedCaret.length <= WORD_SEARCH_MAX_LEN) {
+        try {
+          const retryResults = para.search(escapedCaret, {
+            matchCase: true,
+            matchWildcards: false
+          });
+          retryResults.load("items");
+          await context.sync();
+          if (retryResults.items && retryResults.items.length > 0) {
+            return retryResults;
+          }
+        } catch (_retryErr) {
+          // Chuyển sang cơ chế thay thế trực tiếp qua OOXML của đoạn văn
+        }
+      }
+    }
+
+    return { items: [] };
+  }
+
+  /**
+   * Dự phòng cấp 3: Thay thế trực tiếp chuỗi công thức trong OOXML của đoạn văn <w:p>
+   * bằng nút <m:oMath> (hoặc <m:oMathPara>) khi paragraph.search không định vị được
+   * (ví dụ công thức dài > 250 ký tự hoặc bị tách run đặc biệt trong Word).
+   */
+  async function replaceRawFormulaViaParaOoxml(context, para, rawText, oMathXml, displayMode) {
+    if (typeof para.getOoxml !== "function" || typeof para.insertOoxml !== "function") {
+      return 0;
+    }
+
+    const ooxmlRes = para.getOoxml();
+    await context.sync();
+
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(ooxmlRes.value || "", "application/xml");
+    if (xmlDoc.querySelector("parsererror")) {
+      return 0;
+    }
+
+    const mNs = "http://schemas.openxmlformats.org/officeDocument/2006/math";
+    const wDocEl = Array.from(xmlDoc.getElementsByTagName("*")).find(
+      (el) => el.localName === "document"
+    );
+    if (wDocEl && !wDocEl.getAttribute("xmlns:m")) {
+      wDocEl.setAttribute("xmlns:m", mNs);
+    }
+
+    // Tạo DOM node <m:oMath> hoặc <m:oMathPara> hợp lệ có khai báo đủ namespace
+    const mathWrapperXml =
+      '<root xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="' +
+      mNs +
+      '">' +
+      (displayMode ? "<m:oMathPara>" + oMathXml + "</m:oMathPara>" : oMathXml) +
+      "</root>";
+    const mathDoc = parser.parseFromString(mathWrapperXml, "application/xml");
+    if (mathDoc.querySelector("parsererror") || !mathDoc.documentElement.firstElementChild) {
+      return 0;
+    }
+    const mathTemplateNode = mathDoc.documentElement.firstElementChild;
+
+    const pNodes = Array.from(xmlDoc.getElementsByTagName("*")).filter(
+      (el) => el.localName === "p"
+    );
+    let replacedTotal = 0;
+
+    pNodes.forEach((pEl) => {
+      const { spans, fullText } = collectParagraphTextSpans(pEl);
+      if (!fullText || fullText.indexOf(rawText) === -1) return;
+
+      const occurrences = [];
+      let searchPos = 0;
+      while (searchPos <= fullText.length - rawText.length) {
+        const idx = fullText.indexOf(rawText, searchPos);
+        if (idx === -1) break;
+        occurrences.push({ start: idx, end: idx + rawText.length });
+        searchPos = idx + rawText.length;
+      }
+
+      // Thay thế từ phải sang trái để giữ nguyên chỉ mục và định dạng <w:rPr> xung quanh
+      for (let i = occurrences.length - 1; i >= 0; i--) {
+        const { start, end } = occurrences[i];
+        const affected = spans.filter((sp) => sp.end > start && sp.start < end);
+        if (affected.length === 0) continue;
+
+        const firstSpan = affected[0];
+        const lastSpan = affected[affected.length - 1];
+        const anchorParent = firstSpan.runEl.parentNode;
+        if (!anchorParent) continue;
+
+        const beforeText = firstSpan.text.slice(0, Math.max(0, start - firstSpan.start));
+        const afterText = lastSpan.text.slice(Math.max(0, end - lastSpan.start));
+
+        const frag = xmlDoc.createDocumentFragment();
+        if (beforeText) {
+          frag.appendChild(createPreservedTextRun(xmlDoc, beforeText, firstSpan.rPr, false));
+        }
+        frag.appendChild(xmlDoc.importNode(mathTemplateNode, true));
+        if (afterText) {
+          frag.appendChild(createPreservedTextRun(xmlDoc, afterText, lastSpan.rPr, false));
+        }
+
+        anchorParent.insertBefore(frag, firstSpan.runEl);
+        affected.forEach((sp) => {
+          if (sp.runEl.parentNode) sp.runEl.parentNode.removeChild(sp.runEl);
+        });
+
+        const rebuilt = collectParagraphTextSpans(pEl).spans;
+        spans.length = 0;
+        rebuilt.forEach((s) => spans.push(s));
+        replacedTotal += 1;
+      }
+    });
+
+    if (replacedTotal > 0) {
+      const serializer = new XMLSerializer();
+      para.insertOoxml(serializer.serializeToString(xmlDoc), Word.InsertLocation.replace);
+      await context.sync();
+    }
+
+    return replacedTotal;
+  }
+
+  /**
    * Tô màu đỏ cảnh báo tại chỗ cho công thức LaTeX bị lỗi cú pháp trong Word.
    */
   async function markSyntaxErrorInPlace(context, para, rawText) {
     if (!rawText || rawText.length > WORD_SEARCH_MAX_LEN) return;
     try {
-      const errRanges = para.search(rawText, { matchCase: true });
-      errRanges.load("items");
-      await context.sync();
+      const errRanges = await searchExactInParagraph(context, para, rawText);
+      if (!errRanges.items || errRanges.items.length === 0) return;
 
       for (let i = 0; i < errRanges.items.length; i++) {
         const r = errRanges.items[i];
@@ -1610,7 +1854,7 @@
           matches.forEach((m) => {
             let syntaxError = "";
             try {
-              renderLatexToMathML(m.latex, m.displayMode);
+              latexToOmmlElement(m.latex, m.displayMode);
             } catch (e) {
               syntaxError = e && e.message ? e.message : String(e);
             }
@@ -1687,7 +1931,7 @@
         paragraphs.load("items/text");
         await context.sync();
 
-        // Thu thập tất cả công thức theo từng đoạn văn (giữ nguyên số lần xuất hiện)
+        // Duyệt từng đoạn văn, dùng Regex chuẩn JS trích xuất chính xác danh sách chuỗi LaTeX
         const tasks = [];
         paragraphs.items.forEach((para, paraIdx) => {
           const matches = extractLatexMatches(para.text || "", opts);
@@ -1733,26 +1977,12 @@
 
           const { para, paragraphIndex, match, count } = tasks[t];
 
-          // Kiểm tra giới hạn độ dài chuỗi search của Word API (255 ký tự)
-          if (match.raw.length > WORD_SEARCH_MAX_LEN) {
-            errorCount += count;
-            processedInstances += count;
-            errorItems.push({
-              paragraphIndex,
-              raw: match.raw,
-              latex: match.latex,
-              displayMode: match.displayMode,
-              message: "Công thức dài hơn 250 ký tự (vượt giới hạn tìm kiếm của Word API)."
-            });
-            updateProgressUI(processedInstances, totalInstances, successCount, errorCount);
-            await yieldToUi();
-            continue;
-          }
-
-          // Bước 1: Dùng Temml chuyển LaTeX -> MathML -> OMML -> OOXML (<pkg:package>)
+          // Bước 1: Dùng Temml (chuẩn hóa MathML xmlns + <msup>/<msub>/<msubsup>) -> OMML -> OOXML (<pkg:package>)
+          let oMathXml = "";
           let ooxml = "";
           try {
-            ooxml = latexToWordOoxml(match.latex, match.displayMode);
+            oMathXml = latexToOmmlElement(match.latex, match.displayMode);
+            ooxml = buildWordOoxml(oMathXml, match.displayMode);
           } catch (syntaxErr) {
             // Bỏ qua công thức lỗi, tô màu đỏ cảnh báo tại chỗ và tiếp tục
             if (opts.highlightError) {
@@ -1772,19 +2002,47 @@
             continue;
           }
 
-          // Bước 2: Tìm chính xác vị trí và chèn bằng insertOoxml(..., Word.InsertLocation.replace)
+          // Bước 2: Định vị bằng paragraph.search(exactString, { matchWildcards: false }) (có xử lý '^' -> '^^' cho Word Desktop)
+          // rồi thay thế bằng insertOoxml(..., Word.InsertLocation.replace)
           try {
-            const results = para.search(match.raw, { matchCase: true });
-            results.load("items");
-            await context.sync();
+            const results = await searchExactInParagraph(context, para, match.raw);
+            let replacedHere = 0;
 
-            for (let k = 0; k < results.items.length; k++) {
-              if (state.cancelRequested) break;
-              results.items[k].insertOoxml(ooxml, Word.InsertLocation.replace);
-              successCount += 1;
-              processedInstances += 1;
+            if (results.items && results.items.length > 0) {
+              for (let k = 0; k < results.items.length; k++) {
+                if (state.cancelRequested) break;
+                results.items[k].insertOoxml(ooxml, Word.InsertLocation.replace);
+                replacedHere += 1;
+              }
+              await context.sync();
+            } else {
+              // Dự phòng khi Word API không định vị được bằng search (vd > 250 ký tự hoặc tách run)
+              replacedHere = await replaceRawFormulaViaParaOoxml(
+                context,
+                para,
+                match.raw,
+                oMathXml,
+                match.displayMode
+              );
             }
-            await context.sync();
+
+            if (replacedHere > 0) {
+              successCount += replacedHere;
+              processedInstances += Math.max(replacedHere, count);
+            } else {
+              if (opts.highlightError) {
+                await markSyntaxErrorInPlace(context, para, match.raw);
+              }
+              errorCount += count;
+              processedInstances += count;
+              errorItems.push({
+                paragraphIndex,
+                raw: match.raw,
+                latex: match.latex,
+                displayMode: match.displayMode,
+                message: "Không định vị được chuỗi công thức trong đoạn văn để chèn Word Equation."
+              });
+            }
           } catch (insertErr) {
             // Lỗi khi chèn OOXML: tô đỏ cảnh báo tại chỗ và tiếp tục công thức tiếp theo
             if (opts.highlightError) {
@@ -2826,12 +3084,12 @@
           return (variation & 0x01)
             ? "\\overbrace{" + s0 + "}" + (s1 ? "^{" + s1 + "}" : "")
             : "\\underbrace{" + s0 + "}" + (s1 ? "_{" + s1 + "}" : "");
-        case 27: // tmSUB (chỉ số dưới)
-          return "_{" + s0 + "}";
-        case 28: // tmSUP (số mũ)
-          return "^{" + s0 + "}";
+        case 27: // tmSUB (chỉ số dưới: slot 0 = sub, slot 1 = L_NULL)
+          return "_" + formatLatexScriptArg(s0 || s1);
+        case 28: // tmSUP (số mũ: hỗ trợ cả chuẩn ScrBoxClass [L_NULL, sup] lẫn 1-slot [sup])
+          return "^" + formatLatexScriptArg(s1 || s0);
         case 29: // tmSUBSUP (cả chỉ số dưới & số mũ)
-          return (s0 ? "_{" + s0 + "}" : "") + (s1 ? "^{" + s1 + "}" : "");
+          return (s0 ? "_" + formatLatexScriptArg(s0) : "") + (s1 ? "^" + formatLatexScriptArg(s1) : "");
         case 30: // tmDIRAC
           return "\\left\\langle " + s0 + " \\middle| " + s1 + " \\right\\rangle";
         case 32: // tmHAT
@@ -4062,17 +4320,23 @@
 
         case "script":
           if (node.sub && node.sup) {
-            // tmSUBSUP (29)
+            // tmSUBSUP (29) — ScrBoxClass: slot 0 = sub, slot 1 = sup
             writeTemplate(29, 0, [
               () => writeLine(node.sub),
               () => writeLine(node.sup)
             ]);
           } else if (node.sub) {
-            // tmSUB (27)
-            writeTemplate(27, 0, [() => writeLine(node.sub)]);
+            // tmSUB (27) — ScrBoxClass: slot 0 = sub, slot 1 = L_NULL
+            writeTemplate(27, 0, [
+              () => writeLine(node.sub),
+              () => writeNullLine()
+            ]);
           } else if (node.sup) {
-            // tmSUP (28)
-            writeTemplate(28, 0, [() => writeLine(node.sup)]);
+            // tmSUP (28) — ScrBoxClass: slot 0 = L_NULL (sub trống), slot 1 = sup
+            writeTemplate(28, 0, [
+              () => writeNullLine(),
+              () => writeLine(node.sup)
+            ]);
           }
           break;
 
@@ -4233,16 +4497,20 @@
 
   /**
    * Đóng gói luồng byte MTEF vào cấu trúc chuẩn luồng "Equation Native"
-   * (Header 28-byte EQNOLEFILEHDR chứa cbHdr, version và cbObject).
+   * (Header 28-byte EQNOLEFILEHDR chuẩn Design Science MathType:
+   *  cbHdr = 28, version = 0x00020000, cf = 0x0008, cbObject, nReserved[4]).
    */
   function wrapMtefInEquationNative(mtefBytes) {
     const out = new Uint8Array(28 + mtefBytes.length);
     const dv = new DataView(out.buffer);
     dv.setUint16(0, 28, true);               // cbHdr = 28 bytes
-    dv.setUint32(2, 0x00020000, true);       // version = 2.0
-    dv.setUint16(6, 0, true);                // cf
-    dv.setUint32(8, mtefBytes.length, true); // cbObject = kích thước MTEF
-    // offset 12..27: reserved1..4 = 0
+    dv.setUint32(2, 0x00020000, true);       // version = 2.0 (0x00020000)
+    dv.setUint16(6, 0x0008, true);           // cf = 0x0008 (chuẩn Design Science MathType)
+    dv.setUint32(8, mtefBytes.length, true); // cbObject = kích thước luồng MTEF
+    dv.setUint32(12, 0, true);               // nReserved1
+    dv.setUint32(16, 0, true);               // nReserved2
+    dv.setUint32(20, 0, true);               // nReserved3
+    dv.setUint32(24, 0, true);               // nReserved4
     out.set(mtefBytes, 28);
     return out;
   }
@@ -4883,79 +5151,304 @@
   }
 
   /**
-   * Tạo nút <w:r> chứa đối tượng MathType <w:object> (<v:shape> + <o:OLEObject>)
-   * kèm thuộc tính canh dòng baseline để khớp khít với văn bản Times New Roman xung quanh.
+  /**
+   * Đọc thông báo lỗi kỹ thuật đầy đủ từ Office.js / Word API (gồm error code và debugInfo).
    */
-  function createMathTypeObjectRun(xmlDoc, cfg) {
-    const wNs = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-    const vNs = "urn:schemas-microsoft-com:vml";
-    const oNs = "urn:schemas-microsoft-com:office:office";
-    const rNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  function formatWordApiError(err) {
+    if (!err) return "Lỗi không xác định từ Word API.";
+    const parts = [];
+    if (err.code) parts.push("[" + err.code + "]");
+    if (err.message) parts.push(String(err.message));
+    if (err.debugInfo && err.debugInfo.message && err.debugInfo.message !== err.message) {
+      parts.push(String(err.debugInfo.message));
+    }
+    if (err.debugInfo && err.debugInfo.errorLocation) {
+      parts.push("(tại " + err.debugInfo.errorLocation + ")");
+    }
+    return parts.length > 0 ? parts.join(" ") : String(err);
+  }
 
-    const runEl = xmlDoc.createElementNS(wNs, "w:r");
+  /**
+   * Bước 1 của quy trình MathType:
+   * Dùng Temml cục bộ (./temml.min.js) chuyển LaTeX sang MathML/HTML, đo kích thước thực tế
+   * khớp dòng chữ Times New Roman (vd: 12pt), rồi vẽ lên <canvas> ẩn qua
+   * <svg><foreignObject>...</foreignObject></svg> ở độ phân giải cao (scale = 2)
+   * để xuất ảnh PNG Base64 sắc nét. Tự động dự phòng sang renderAstPreviewPng (Canvas 2D scale=2)
+   * nếu trình duyệt/WebView chặn foreignObject toDataURL (SecurityError) hoặc vẽ rỗng.
+   */
+  async function renderLatexToPngBase64(latex, astNodes, fontSizePt, displayMode) {
+    const fallback = () => {
+      const res = renderAstPreviewPng(astNodes, fontSizePt, displayMode);
+      return {
+        imageBase64: res.pngBase64,
+        widthPt: res.widthPt,
+        heightPt: res.heightPt,
+        descentPt: res.descentPt
+      };
+    };
 
-    // Giữ nguyên định dạng Times New Roman và canh chỉnh vị trí baseline theo half-point
-    const rPrEl = cfg.templateRPr
-      ? cfg.templateRPr.cloneNode(true)
-      : xmlDoc.createElementNS(wNs, "w:rPr");
+    if (
+      typeof document === "undefined" ||
+      typeof Image === "undefined" ||
+      typeof temml === "undefined" ||
+      typeof temml.renderToString !== "function"
+    ) {
+      return fallback();
+    }
 
-    if (!cfg.displayMode && cfg.descentPt > 0) {
-      const existingPos = Array.from(rPrEl.children).find((el) => el.localName === "position");
-      if (existingPos) rPrEl.removeChild(existingPos);
-      const posEl = xmlDoc.createElementNS(wNs, "w:position");
-      const halfPts = Math.round(cfg.descentPt * 2);
-      if (halfPts > 0) {
-        posEl.setAttributeNS(wNs, "w:val", String(-halfPts));
-        rPrEl.appendChild(posEl);
+    const canvas = dom.mtPreviewCanvas || document.createElement("canvas");
+    if (!canvas || typeof canvas.getContext !== "function") {
+      return fallback();
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      return fallback();
+    }
+
+    const clean = stripOuterDelimiters(latex);
+    const ptToPx = 96 / 72;
+    const scale = 2;
+    const padX = Math.max(2, Math.ceil(fontSizePt * ptToPx * 0.16));
+    const padY = Math.max(2, Math.ceil(fontSizePt * ptToPx * 0.12));
+
+    let mathmlHtml = "";
+    try {
+      mathmlHtml = renderLatexToMathML(clean, displayMode);
+    } catch {
+      return fallback();
+    }
+
+    // Đo kích thước hiển thị thực tế của MathML trong DOM ẩn (Times New Roman đúng fontSizePt)
+    let cssW = 0;
+    let cssH = 0;
+    let descentPx = fontSizePt * ptToPx * 0.22;
+
+    if (document.body && typeof document.createElement === "function") {
+      const probe = document.createElement("div");
+      probe.style.position = "fixed";
+      probe.style.left = "-99999px";
+      probe.style.top = "-99999px";
+      probe.style.visibility = "hidden";
+      probe.style.pointerEvents = "none";
+      probe.style.display = "inline-block";
+      probe.style.whiteSpace = "nowrap";
+      probe.style.padding = padY + "px " + padX + "px";
+      probe.style.fontFamily = '"Times New Roman", "Cambria Math", Georgia, serif';
+      probe.style.fontSize = fontSizePt + "pt";
+      probe.style.lineHeight = "1.15";
+      probe.style.color = "#000000";
+      try {
+        temml.render(clean, probe, {
+          displayMode: Boolean(displayMode),
+          throwOnError: true
+        });
+        document.body.appendChild(probe);
+        const rect = probe.getBoundingClientRect();
+        cssW = Math.ceil(rect.width || 0);
+        cssH = Math.ceil(rect.height || 0);
+
+        // Ước lượng khoảng descent để căn khớp baseline chữ Times New Roman 12pt
+        if (cssH > fontSizePt * ptToPx * 1.6) {
+          descentPx = Math.max(fontSizePt * ptToPx * 0.25, (cssH - fontSizePt * ptToPx * 0.72) * 0.45);
+        }
+      } catch {
+        cssW = 0;
+        cssH = 0;
+      } finally {
+        if (probe.parentNode) probe.parentNode.removeChild(probe);
       }
     }
-    if (rPrEl.childNodes.length > 0) {
-      runEl.appendChild(rPrEl);
+
+    // Nếu không đo được bằng DOM (vd môi trường headless), lấy kích thước từ Canvas 2D fallback
+    if (cssW < 8 || cssH < 8) {
+      return fallback();
     }
 
-    const objEl = xmlDoc.createElementNS(wNs, "w:object");
-    objEl.setAttributeNS(wNs, "w:dxaOrig", String(Math.round(cfg.widthPt * 20)));
-    objEl.setAttributeNS(wNs, "w:dyaOrig", String(Math.round(cfg.heightPt * 20)));
+    // Gói MathML vào SVG <foreignObject> tự chứa hoàn toàn (không tham chiếu tài nguyên ngoài)
+    const svgXml =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="' +
+      cssW +
+      '" height="' +
+      cssH +
+      '" viewBox="0 0 ' +
+      cssW +
+      " " +
+      cssH +
+      '">' +
+        '<foreignObject x="0" y="0" width="100%" height="100%">' +
+          '<div xmlns="http://www.w3.org/1999/xhtml" style="' +
+            "margin:0;padding:" + padY + "px " + padX + "px;" +
+            "width:" + cssW + "px;height:" + cssH + "px;box-sizing:border-box;" +
+            "display:flex;align-items:center;justify-content:center;" +
+            "font-family:'Times New Roman','Cambria Math',Georgia,serif;" +
+            "font-size:" + fontSizePt + "pt;line-height:1.15;color:#000000;background:transparent;" +
+          '">' +
+            mathmlHtml +
+          "</div>" +
+        "</foreignObject>" +
+      "</svg>";
 
-    if (cfg.includeShapeType) {
-      const shapeType = xmlDoc.createElementNS(vNs, "v:shapetype");
-      shapeType.setAttribute("id", "_x0000_t75");
-      shapeType.setAttribute("coordsize", "21600,21600");
-      shapeType.setAttributeNS(oNs, "o:spt", "75");
-      shapeType.setAttributeNS(oNs, "o:preferrelative", "t");
-      shapeType.setAttribute("path", "m@4@5l@4@11@9@11@9@5xe");
-      shapeType.setAttribute("filled", "f");
-      shapeType.setAttribute("stroked", "f");
-      objEl.appendChild(shapeType);
+    const svgDataUrl = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgXml);
+
+    try {
+      const renderedBase64 = await new Promise((resolve, reject) => {
+        const img = new Image();
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (!settled) {
+            settled = true;
+            reject(new Error("Quá thời gian dựng ảnh SVG MathML."));
+          }
+        }, 1200);
+
+        img.onload = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          try {
+            canvas.width = Math.max(16, Math.ceil(cssW * scale));
+            canvas.height = Math.max(16, Math.ceil(cssH * scale));
+            ctx.setTransform(scale, 0, 0, scale, 0, 0);
+            ctx.clearRect(0, 0, cssW, cssH);
+            ctx.drawImage(img, 0, 0, cssW, cssH);
+
+            // Kiểm tra pixel thực tế để bảo đảm WebView không vẽ ảnh trong suốt rỗng
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            let hasInk = false;
+            for (let p = 3; p < imgData.length; p += 16) {
+              if (imgData[p] > 10) {
+                hasInk = true;
+                break;
+              }
+            }
+            if (!hasInk) {
+              reject(new Error("WebView dựng ảnh SVG foreignObject rỗng."));
+              return;
+            }
+
+            const dataUrl = canvas.toDataURL("image/png");
+            const b64 = dataUrl.replace(/^data:image\/png;base64,/, "");
+            if (!b64) {
+              reject(new Error("Không xuất được PNG Base64 từ canvas."));
+              return;
+            }
+            resolve(b64);
+          } catch (drawErr) {
+            reject(drawErr);
+          }
+        };
+
+        img.onerror = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(new Error("Không thể nạp ảnh SVG MathML."));
+        };
+
+        img.src = svgDataUrl;
+      });
+
+      return {
+        imageBase64: renderedBase64,
+        widthPt: Number((cssW / ptToPx).toFixed(2)),
+        heightPt: Number((cssH / ptToPx).toFixed(2)),
+        descentPt: Number((descentPx / ptToPx).toFixed(2))
+      };
+    } catch {
+      // Dự phòng an toàn sang bộ vẽ Canvas 2D thuần (scale=2, không bao giờ bị taint canvas)
+      return fallback();
     }
-
-    const shapeEl = xmlDoc.createElementNS(vNs, "v:shape");
-    shapeEl.setAttribute("id", cfg.shapeId);
-    shapeEl.setAttribute("type", "#_x0000_t75");
-    shapeEl.setAttribute(
-      "style",
-      "width:" + cfg.widthPt + "pt;height:" + cfg.heightPt + "pt"
-    );
-    shapeEl.setAttributeNS(oNs, "o:ole", "");
-
-    const imgDataEl = xmlDoc.createElementNS(vNs, "v:imagedata");
-    imgDataEl.setAttributeNS(rNs, "r:id", cfg.imgRelId);
-    imgDataEl.setAttributeNS(oNs, "o:title", "");
-    shapeEl.appendChild(imgDataEl);
-
-    const oleEl = xmlDoc.createElementNS(oNs, "o:OLEObject");
-    oleEl.setAttribute("Type", "Embed");
-    oleEl.setAttribute("ProgID", "Equation.DSMT4");
-    oleEl.setAttribute("ShapeID", cfg.shapeId);
-    oleEl.setAttribute("DrawAspect", "Content");
-    oleEl.setAttribute("ObjectID", cfg.objectId);
-    oleEl.setAttributeNS(rNs, "r:id", cfg.oleRelId);
-
-    objEl.appendChild(shapeEl);
-    objEl.appendChild(oleEl);
-    runEl.appendChild(objEl);
-    return runEl;
   }
+
+  /**
+   * Bước 3 của quy trình MathType:
+   * Tạo gói Flat OPC OOXML (<pkg:package>) chuẩn độc lập cho từng đối tượng MathType (Equation.DSMT4)
+   * gồm đầy đủ các thành phần bắt buộc để Word chấp nhận insertOoxml():
+   * - /_rels/.rels (quan hệ gốc trỏ tới word/document.xml)
+   * - /word/_rels/document.xml.rels (khai báo rId_img -> media/image1.png và rId_ole -> embeddings/oleObject1.bin)
+   * - /word/document.xml (khai báo đủ xmlns:w, xmlns:r, xmlns:v, xmlns:o cùng thẻ <w:object>, <v:shape>, <o:OLEObject>)
+   * - /word/media/image1.png (pkg:contentType="image/png")
+   * - /word/embeddings/oleObject1.bin (pkg:contentType="application/vnd.openxmlformats-officedocument.oleObject")
+   */
+  function createMathTypeOoxml(params) {
+    const imageBase64 = String((params && params.imageBase64) || "");
+    const oleBase64 = String((params && params.oleBase64) || "");
+    if (!imageBase64 || !oleBase64) {
+      throw new Error("Thiếu dữ liệu ảnh PNG hoặc tệp nhị phân OLE để tạo gói OOXML MathType.");
+    }
+
+    const widthNum = Math.max(6, Number((params && params.widthPt) || 24));
+    const heightNum = Math.max(8, Number((params && params.heightPt) || 14));
+    const widthPt = widthNum.toFixed(2);
+    const heightPt = heightNum.toFixed(2);
+    const dxaOrig = Math.max(20, Math.round(widthNum * 20));
+    const dyaOrig = Math.max(20, Math.round(heightNum * 20));
+    const shapeId = (params && params.shapeId) || "_x0000_i1025";
+    const objectId = (params && params.objectId) || "_1700000001";
+    const fontSizePt = Number((params && params.fontSizePt) || 12);
+    const szHalfPt = Math.max(12, Math.round(fontSizePt * 2));
+    const displayMode = Boolean(params && params.displayMode);
+    const descentPt = Number((params && params.descentPt) || 0);
+    const posHalfPt = !displayMode && descentPt > 0 ? Math.round(descentPt * 2) : 0;
+    const posXml = posHalfPt > 0 ? '<w:position w:val="' + (-posHalfPt) + '"/>' : "";
+
+    return (
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">' +
+        '<pkg:part pkg:name="/_rels/.rels" pkg:contentType="application/vnd.openxmlformats-package.relationships+xml">' +
+          "<pkg:xmlData>" +
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+              '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+            "</Relationships>" +
+          "</pkg:xmlData>" +
+        "</pkg:part>" +
+        '<pkg:part pkg:name="/word/_rels/document.xml.rels" pkg:contentType="application/vnd.openxmlformats-package.relationships+xml">' +
+          "<pkg:xmlData>" +
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+              '<Relationship Id="rId_img" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>' +
+              '<Relationship Id="rId_ole" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="embeddings/oleObject1.bin"/>' +
+            "</Relationships>" +
+          "</pkg:xmlData>" +
+        "</pkg:part>" +
+        '<pkg:part pkg:name="/word/document.xml" pkg:contentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml">' +
+          "<pkg:xmlData>" +
+            '<w:document ' +
+              'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" ' +
+              'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" ' +
+              'xmlns:v="urn:schemas-microsoft-com:vml" ' +
+              'xmlns:o="urn:schemas-microsoft-com:office:office">' +
+              "<w:body>" +
+                "<w:p>" +
+                  "<w:r>" +
+                    "<w:rPr>" +
+                      '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>' +
+                      '<w:sz w:val="' + szHalfPt + '"/>' +
+                      posXml +
+                    "</w:rPr>" +
+                    '<w:object w:dxaOrig="' + dxaOrig + '" w:dyaOrig="' + dyaOrig + '">' +
+                      '<v:shapetype id="_x0000_t75" coordsize="21600,21600" o:spt="75" o:preferrelative="t" path="m@4@5l@4@11@9@11@9@5xe" filled="f" stroked="f"/>' +
+                      '<v:shape id="' + escapeXml(shapeId) + '" type="#_x0000_t75" style="width:' + widthPt + "pt;height:" + heightPt + 'pt;vertical-align:middle" o:ole="">' +
+                        '<v:imagedata r:id="rId_img" o:title=""/>' +
+                      "</v:shape>" +
+                      '<o:OLEObject Type="Embed" ProgID="Equation.DSMT4" ShapeID="' + escapeXml(shapeId) + '" DrawAspect="Content" ObjectID="' + escapeXml(objectId) + '" r:id="rId_ole"/>' +
+                    "</w:object>" +
+                  "</w:r>" +
+                "</w:p>" +
+              "</w:body>" +
+            "</w:document>" +
+          "</pkg:xmlData>" +
+        "</pkg:part>" +
+        '<pkg:part pkg:name="/word/media/image1.png" pkg:contentType="image/png" pkg:compression="store">' +
+          "<pkg:binaryData>" + imageBase64 + "</pkg:binaryData>" +
+        "</pkg:part>" +
+        '<pkg:part pkg:name="/word/embeddings/oleObject1.bin" pkg:contentType="application/vnd.openxmlformats-officedocument.oleObject" pkg:compression="store">' +
+          "<pkg:binaryData>" + oleBase64 + "</pkg:binaryData>" +
+        "</pkg:part>" +
+      "</pkg:package>"
+    );
+  }
+
+  window.createMathTypeOoxml = createMathTypeOoxml;
 
   /**
    * Thu thập các đoạn văn bản liên tiếp (<w:r> chỉ chứa <w:t>) trong một <w:p>
@@ -5027,7 +5520,12 @@
   /**
    * Module độc lập: Chuyển đổi hàng loạt LaTeX ($...$, $$...$$, \(...\), \[...\])
    * trong vùng chọn hoặc toàn tài liệu sang đối tượng MathType nhúng (Equation.DSMT4)
-   * có thể nhấp đúp chỉnh sửa trực tiếp bằng phần mềm MathType, giữ nguyên Times New Roman.
+   * hoàn toàn bằng JavaScript thuần (không cần cài phần mềm MathType trên máy):
+   * 1. Tạo ảnh PNG Base64 sắc nét (scale = 2) qua Temml + SVG foreignObject -> Canvas.
+   * 2. Mã hóa MTEF v5 -> luồng Equation Native (28-byte header, cf=0x0008) -> OLE CFBF Base64.
+   * 3. Đóng gói Flat OPC OOXML chuẩn đầy đủ quan hệ ảnh/OLE (createMathTypeOoxml).
+   * 4. Định vị từng công thức bằng searchExactInParagraph (matchWildcards: false) và
+   *    bọc item.insertOoxml(..., replace) + context.sync() trong try...catch riêng biệt.
    */
   async function convertLatexToMathType(options) {
     if (!ensureWordAvailable() || state.isBusy) return null;
@@ -5056,9 +5554,11 @@
     renderErrorReport([]);
 
     let totalFound = 0;
+    let processedCount = 0;
     let convertedCount = 0;
     let errorCount = 0;
     let autoSwitched = false;
+    let lastTechError = "";
     const errorItems = [];
 
     try {
@@ -5066,91 +5566,35 @@
         const target = await resolveTargetContainer(context, requestedScope);
         autoSwitched = target.autoSwitchedToBody;
 
-        // 1. Lấy toàn bộ gói OOXML hiện tại để giữ nguyên 100% font Times New Roman & định dạng đoạn văn
-        const ooxmlRes = target.container.getOoxml();
+        const paragraphs = target.container.paragraphs;
+        paragraphs.load("items/text");
         await context.sync();
 
-        const parser = new DOMParser();
-        const xmlDoc = parser.parseFromString(ooxmlRes.value || "", "application/xml");
-        if (xmlDoc.querySelector("parsererror")) {
-          throw new Error("Không thể phân tích cú pháp OOXML trả về từ Word.");
-        }
+        // Duyệt từng đoạn văn và trích xuất công thức LaTeX bằng Regex chuẩn JS
+        const tasks = [];
+        paragraphs.items.forEach((para, paraIdx) => {
+          const matches = extractLatexMatches(para.text || "", extractOpts);
+          if (matches.length === 0) return;
 
-        const pkgNs = "http://schemas.microsoft.com/office/2006/xmlPackage";
-        const relNs = "http://schemas.openxmlformats.org/package/2006/relationships";
-        const vNs = "urn:schemas-microsoft-com:vml";
-        const oNs = "urn:schemas-microsoft-com:office:office";
-        const rNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-
-        const pkgRoot = xmlDoc.documentElement;
-        const allParts = Array.from(xmlDoc.getElementsByTagName("*")).filter(
-          (el) => el.localName === "part"
-        );
-
-        let documentPart = null;
-        let relsContainer = null;
-        const existingRelIds = new Set();
-
-        allParts.forEach((part) => {
-          const name = (getAttrByLocalName(part, "name") || "").toLowerCase();
-          if (name === "/word/document.xml") {
-            documentPart = part;
-          } else if (name.endsWith("document.xml.rels")) {
-            const relRoot = Array.from(part.getElementsByTagName("*")).find(
-              (el) => el.localName === "Relationships"
-            );
-            if (relRoot) {
-              relsContainer = relRoot;
-              Array.from(relRoot.getElementsByTagName("*"))
-                .filter((el) => el.localName === "Relationship")
-                .forEach((r) => {
-                  const id = getAttrByLocalName(r, "Id");
-                  if (id) existingRelIds.add(id);
-                });
+          // Gom theo chuỗi raw duy nhất trong cùng 1 đoạn để tránh tìm lặp
+          const grouped = new Map();
+          matches.forEach((m) => {
+            if (!grouped.has(m.raw)) {
+              grouped.set(m.raw, { match: m, count: 1 });
+            } else {
+              grouped.get(m.raw).count += 1;
             }
-          }
-        });
+          });
 
-        // Tạo phần /word/_rels/document.xml.rels nếu tài liệu chưa có
-        if (!relsContainer) {
-          const relsPart = xmlDoc.createElementNS(pkgNs, "pkg:part");
-          relsPart.setAttributeNS(pkgNs, "pkg:name", "/word/_rels/document.xml.rels");
-          relsPart.setAttributeNS(
-            pkgNs,
-            "pkg:contentType",
-            "application/vnd.openxmlformats-package.relationships+xml"
-          );
-          const xmlDataEl = xmlDoc.createElementNS(pkgNs, "pkg:xmlData");
-          relsContainer = xmlDoc.createElementNS(relNs, "Relationships");
-          xmlDataEl.appendChild(relsContainer);
-          relsPart.appendChild(xmlDataEl);
-          pkgRoot.insertBefore(relsPart, pkgRoot.firstChild);
-        }
-
-        // Bảo đảm thẻ <w:document> khai báo đầy đủ namespace VML/Office/Relationships
-        const wDocEl = Array.from((documentPart || xmlDoc).getElementsByTagName("*")).find(
-          (el) => el.localName === "document"
-        );
-        if (wDocEl) {
-          if (!wDocEl.getAttribute("xmlns:v")) wDocEl.setAttribute("xmlns:v", vNs);
-          if (!wDocEl.getAttribute("xmlns:o")) wDocEl.setAttribute("xmlns:o", oNs);
-          if (!wDocEl.getAttribute("xmlns:r")) wDocEl.setAttribute("xmlns:r", rNs);
-        }
-
-        // 2. Quét trước tất cả công thức LaTeX trong các thẻ <w:p> để có tổng số cho thanh tiến trình
-        const pNodes = Array.from((documentPart || xmlDoc).getElementsByTagName("*")).filter(
-          (el) => el.localName === "p"
-        );
-
-        const paraJobs = [];
-        pNodes.forEach((pEl, pIdx) => {
-          const { spans, fullText } = collectParagraphTextSpans(pEl);
-          if (!fullText) return;
-          const matches = extractLatexMatches(fullText, extractOpts);
-          if (matches.length > 0) {
-            paraJobs.push({ pEl, pIdx, spans, matches });
-            totalFound += matches.length;
-          }
+          grouped.forEach((entry) => {
+            totalFound += entry.count;
+            tasks.push({
+              para,
+              paragraphIndex: paraIdx + 1,
+              match: entry.match,
+              count: entry.count
+            });
+          });
         });
 
         if (totalFound === 0) {
@@ -5168,128 +5612,166 @@
         await yieldToUi();
 
         let seqNum = 0;
-        let processedCount = 0;
-        const baseObjId = 1740000000 + Math.floor(Math.random() * 9000000);
+        const baseObjId = 1700000000 + Math.floor(Math.random() * 900000);
 
-        function nextUniqueRelId(prefix) {
-          let candidate = prefix + seqNum;
-          while (existingRelIds.has(candidate)) {
-            seqNum += 1;
-            candidate = prefix + seqNum;
-          }
-          existingRelIds.add(candidate);
-          return candidate;
-        }
-
-        // 3. Chuyển đổi từng công thức sang MTEF v5 + OLE CFBF + PNG preview và thay thế tại chỗ
-        for (let j = 0; j < paraJobs.length; j++) {
+        for (let t = 0; t < tasks.length; t++) {
           if (state.cancelRequested) break;
-          const { pEl, pIdx, spans, matches } = paraJobs[j];
+          const { para, paragraphIndex, match, count } = tasks[t];
 
-          // Chuẩn bị mảng node thay thế cho từng match (xử lý lỗi độc lập từng công thức)
-          const matchResults = [];
-          for (let mIdx = 0; mIdx < matches.length; mIdx++) {
+          // Bước 1 & 2: Phân tích LaTeX -> MTEF v5 -> Equation Native -> OLE CFBF + ảnh PNG Base64 (scale=2)
+          let ast = null;
+          let oleBase64 = "";
+          let preview = null;
+          try {
+            if (typeof temml !== "undefined") {
+              try {
+                renderLatexToMathML(match.latex, match.displayMode);
+              } catch (temmlSyntaxErr) {
+                if (!hasBalancedLatexBraces(match.latex)) {
+                  throw temmlSyntaxErr;
+                }
+              }
+            }
+
+            ast = parseLatexToAst(match.latex);
+            const mtefBytes = encodeAstToMtefV5(ast, {
+              displayMode: match.displayMode,
+              fontSizePt
+            });
+            const nativeBytes = wrapMtefInEquationNative(mtefBytes);
+            const oleCfbBytes = buildOleCfbWithEquationNative(nativeBytes);
+            oleBase64 = uint8ArrayToBase64(oleCfbBytes);
+            preview = await renderLatexToPngBase64(match.latex, ast, fontSizePt, match.displayMode);
+          } catch (buildErr) {
+            const errMsg = formatWordApiError(buildErr);
+            lastTechError = errMsg;
+            if (shouldHighlightError) {
+              await markSyntaxErrorInPlace(context, para, match.raw);
+            }
+            errorCount += count;
+            processedCount += count;
+            errorItems.push({
+              paragraphIndex,
+              raw: match.raw,
+              latex: match.latex,
+              displayMode: match.displayMode,
+              message: "Lỗi tạo dữ liệu MathType: " + errMsg
+            });
+            updateProgressUI(
+              processedCount,
+              totalFound,
+              convertedCount,
+              errorCount,
+              "Đang tạo MathType " + processedCount + "/" + totalFound + " công thức..."
+            );
+            await yieldToUi();
+            continue;
+          }
+
+          // Bước 3 & 4: Định vị bằng searchExactInParagraph (matchWildcards: false) và chèn OOXML từng công thức
+          let searchResults = { items: [] };
+          try {
+            searchResults = await searchExactInParagraph(context, para, match.raw);
+          } catch (searchErr) {
+            const errMsg = formatWordApiError(searchErr);
+            lastTechError = errMsg;
+            errorCount += count;
+            processedCount += count;
+            errorItems.push({
+              paragraphIndex,
+              raw: match.raw,
+              latex: match.latex,
+              displayMode: match.displayMode,
+              message: "Lỗi tìm vị trí công thức trong Word: " + errMsg
+            });
+            updateProgressUI(
+              processedCount,
+              totalFound,
+              convertedCount,
+              errorCount,
+              "Đang tạo MathType " + processedCount + "/" + totalFound + " công thức..."
+            );
+            await yieldToUi();
+            continue;
+          }
+
+          if (!searchResults.items || searchResults.items.length === 0) {
+            const notFoundMsg =
+              "Word không định vị được chuỗi \"" +
+              match.raw +
+              "\" trong đoạn " +
+              paragraphIndex +
+              " (có thể công thức dài > 250 ký tự hoặc bị ngắt định dạng).";
+            lastTechError = notFoundMsg;
+            errorCount += count;
+            processedCount += count;
+            errorItems.push({
+              paragraphIndex,
+              raw: match.raw,
+              latex: match.latex,
+              displayMode: match.displayMode,
+              message: notFoundMsg
+            });
+            updateProgressUI(
+              processedCount,
+              totalFound,
+              convertedCount,
+              errorCount,
+              "Đang tạo MathType " + processedCount + "/" + totalFound + " công thức..."
+            );
+            await yieldToUi();
+            continue;
+          }
+
+          // Chèn và đồng bộ từng vị trí với try...catch độc lập để bắt chính xác lỗi nếu Word từ chối OOXML
+          for (let k = 0; k < searchResults.items.length; k++) {
             if (state.cancelRequested) break;
-            const match = matches[mIdx];
-            processedCount += 1;
+            const item = searchResults.items[k];
+            seqNum += 1;
+
+            const shapeId = "_x0000_i" + (1024 + seqNum);
+            const objectId = "_" + (baseObjId + seqNum);
 
             try {
-              // Kiểm tra cú pháp nghiêm ngặt bằng Temml (nếu có) trước khi mã hóa MTEF
-              if (typeof temml !== "undefined") {
-                renderLatexToMathML(match.latex, match.displayMode);
-              }
-
-              const ast = parseLatexToAst(match.latex);
-              const mtefBytes = encodeAstToMtefV5(ast, {
-                displayMode: match.displayMode,
-                fontSizePt
+              const ooxml = createMathTypeOoxml({
+                imageBase64: preview.imageBase64,
+                oleBase64,
+                widthPt: preview.widthPt,
+                heightPt: preview.heightPt,
+                descentPt: preview.descentPt,
+                shapeId,
+                objectId,
+                fontSizePt,
+                displayMode: match.displayMode
               });
-              const nativeBytes = wrapMtefInEquationNative(mtefBytes);
-              const oleCfbBytes = buildOleCfbWithEquationNative(nativeBytes);
-              const oleBase64 = uint8ArrayToBase64(oleCfbBytes);
-              const preview = renderAstPreviewPng(ast, fontSizePt, match.displayMode);
 
-              seqNum += 1;
-              const oleRelId = nextUniqueRelId("rIdMtOle");
-              const imgRelId = nextUniqueRelId("rIdMtImg");
-              const oleFile = "embeddings/oleObjectMt" + seqNum + ".bin";
-              const imgFile = "media/imageMt" + seqNum + ".png";
-              const shapeId = "_x0000_i" + (1024 + seqNum);
-              const objectId = "_" + (baseObjId + seqNum);
-
-              // Thêm <Relationship> cho file OLE và ảnh xem trước PNG
-              const oleRel = xmlDoc.createElementNS(relNs, "Relationship");
-              oleRel.setAttribute("Id", oleRelId);
-              oleRel.setAttribute(
-                "Type",
-                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject"
-              );
-              oleRel.setAttribute("Target", oleFile);
-              relsContainer.appendChild(oleRel);
-
-              const imgRel = xmlDoc.createElementNS(relNs, "Relationship");
-              imgRel.setAttribute("Id", imgRelId);
-              imgRel.setAttribute(
-                "Type",
-                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
-              );
-              imgRel.setAttribute("Target", imgFile);
-              relsContainer.appendChild(imgRel);
-
-              // Thêm <pkg:part> nhị phân cho oleObject*.bin
-              const olePart = xmlDoc.createElementNS(pkgNs, "pkg:part");
-              olePart.setAttributeNS(pkgNs, "pkg:name", "/word/" + oleFile);
-              olePart.setAttributeNS(
-                pkgNs,
-                "pkg:contentType",
-                "application/vnd.openxmlformats-officedocument.oleObject"
-              );
-              olePart.setAttributeNS(pkgNs, "pkg:compression", "store");
-              const oleBin = xmlDoc.createElementNS(pkgNs, "pkg:binaryData");
-              oleBin.textContent = oleBase64;
-              olePart.appendChild(oleBin);
-              pkgRoot.appendChild(olePart);
-
-              // Thêm <pkg:part> ảnh xem trước PNG
-              const imgPart = xmlDoc.createElementNS(pkgNs, "pkg:part");
-              imgPart.setAttributeNS(pkgNs, "pkg:name", "/word/" + imgFile);
-              imgPart.setAttributeNS(pkgNs, "pkg:contentType", "image/png");
-              imgPart.setAttributeNS(pkgNs, "pkg:compression", "store");
-              const imgBin = xmlDoc.createElementNS(pkgNs, "pkg:binaryData");
-              imgBin.textContent = preview.pngBase64;
-              imgPart.appendChild(imgBin);
-              pkgRoot.appendChild(imgPart);
-
-              matchResults.push({
-                ok: true,
-                match,
-                cfg: {
-                  oleRelId,
-                  imgRelId,
-                  shapeId,
-                  objectId,
-                  widthPt: preview.widthPt,
-                  heightPt: preview.heightPt,
-                  descentPt: preview.descentPt,
-                  displayMode: match.displayMode,
-                  includeShapeType: convertedCount === 0
-                }
-              });
+              item.insertOoxml(ooxml, Word.InsertLocation.replace);
+              await context.sync();
               convertedCount += 1;
-            } catch (itemErr) {
+            } catch (insertErr) {
+              const techErr = formatWordApiError(insertErr);
+              lastTechError = techErr;
               errorCount += 1;
-              const errMsg =
-                itemErr && itemErr.message ? itemErr.message : String(itemErr);
+              if (shouldHighlightError) {
+                try {
+                  item.font.color = "#DC2626";
+                  item.font.bold = true;
+                  await context.sync();
+                } catch {
+                  // Bỏ qua nếu không thể tô màu trực tiếp trên range lỗi
+                }
+              }
               errorItems.push({
-                paragraphIndex: pIdx + 1,
+                paragraphIndex,
                 raw: match.raw,
                 latex: match.latex,
                 displayMode: match.displayMode,
-                message: errMsg
+                message: "Word từ chối chèn OOXML MathType: " + techErr
               });
-              matchResults.push({ ok: false, match });
+              showStatus("Lỗi chèn MathType (" + match.raw + "): " + techErr, "error");
             }
 
+            processedCount += 1;
             updateProgressUI(
               processedCount,
               totalFound,
@@ -5299,79 +5781,6 @@
             );
             await yieldToUi();
           }
-
-          // 4. Thay thế từng match vào đúng vị trí trong <w:p> (từ phải sang trái) để giữ nguyên <w:rPr> xung quanh
-          for (let rIdx = matchResults.length - 1; rIdx >= 0; rIdx--) {
-            const res = matchResults[rIdx];
-            const { start, end, raw } = res.match;
-
-            // Tìm các span bị phủ bởi đoạn [start, end)
-            const affected = spans.filter((sp) => sp.end > start && sp.start < end);
-            if (affected.length === 0) continue;
-
-            const firstSpan = affected[0];
-            const lastSpan = affected[affected.length - 1];
-            const anchorParent = firstSpan.runEl.parentNode;
-            if (!anchorParent) continue;
-
-            const beforeText = firstSpan.text.slice(0, Math.max(0, start - firstSpan.start));
-            const afterText = lastSpan.text.slice(Math.max(0, end - lastSpan.start));
-
-            const replacementFragment = xmlDoc.createDocumentFragment();
-            if (beforeText) {
-              replacementFragment.appendChild(
-                createPreservedTextRun(xmlDoc, beforeText, firstSpan.rPr, false)
-              );
-            }
-
-            if (res.ok) {
-              replacementFragment.appendChild(
-                createMathTypeObjectRun(xmlDoc, {
-                  ...res.cfg,
-                  templateRPr: firstSpan.rPr
-                })
-              );
-            } else {
-              replacementFragment.appendChild(
-                createPreservedTextRun(xmlDoc, raw, firstSpan.rPr, shouldHighlightError)
-              );
-            }
-
-            if (afterText) {
-              replacementFragment.appendChild(
-                createPreservedTextRun(xmlDoc, afterText, lastSpan.rPr, false)
-              );
-            }
-
-            anchorParent.insertBefore(replacementFragment, firstSpan.runEl);
-
-            // Xóa các thẻ <w:r> cũ đã được thay thế và cập nhật lại bảng spans cho các match bên trái
-            const firstIdxInSpans = spans.indexOf(firstSpan);
-            const lastIdxInSpans = spans.indexOf(lastSpan);
-            affected.forEach((sp) => {
-              if (sp.runEl.parentNode) sp.runEl.parentNode.removeChild(sp.runEl);
-            });
-
-            // Nếu phần beforeText còn lại vẫn nằm trong phạm vi các match bên trái, cập nhật span đầu tiên
-            if (beforeText) {
-              const insertedBeforeRun = firstSpan.runEl; // đã bị remove; lấy node vừa chèn trước đối tượng mới
-              // Tìm lại node vừa chèn ngay phía trước điểm chèn
-              const rebuiltSpans = collectParagraphTextSpans(pEl).spans;
-              spans.length = 0;
-              rebuiltSpans.forEach((s) => spans.push(s));
-              void insertedBeforeRun;
-            } else {
-              spans.splice(firstIdxInSpans, lastIdxInSpans - firstIdxInSpans + 1);
-            }
-          }
-        }
-
-        // 5. Ghi lại OOXML hoàn chỉnh vào Word bằng insertOoxml(..., replace)
-        if (convertedCount > 0 || (errorCount > 0 && shouldHighlightError)) {
-          const serializer = new XMLSerializer();
-          const updatedOoxml = serializer.serializeToString(xmlDoc);
-          target.container.insertOoxml(updatedOoxml, Word.InsertLocation.replace);
-          await context.sync();
         }
       });
 
@@ -5385,19 +5794,35 @@
         );
       } else if (state.cancelRequested) {
         updateProgressUI(
-          convertedCount + errorCount,
+          processedCount,
           totalFound,
           convertedCount,
           errorCount,
-          "Đã dừng tại " + (convertedCount + errorCount) + "/" + totalFound + " công thức"
+          "Đã dừng tại " + processedCount + "/" + totalFound + " công thức"
         );
         showStatus(
           prefix +
             "Đã dừng chuyển đổi MathType. Thành công " +
             convertedCount +
             " công thức" +
-            (errorCount > 0 ? ", bỏ qua " + errorCount + " lỗi." : "."),
+            (errorCount > 0 ? ", lỗi " + errorCount + " công thức." : "."),
           "warn"
+        );
+      } else if (convertedCount === 0 && errorCount > 0) {
+        updateProgressUI(
+          totalFound,
+          totalFound,
+          0,
+          errorCount,
+          "Thất bại 0/" + totalFound + " công thức (" + errorCount + " lỗi)"
+        );
+        showStatus(
+          prefix +
+            "Không thể chèn đối tượng MathType (0/" +
+            totalFound +
+            " thành công). Lỗi kỹ thuật: " +
+            lastTechError,
+          "error"
         );
       } else {
         updateProgressUI(
@@ -5416,18 +5841,16 @@
             " công thức sang MathType (Equation.DSMT4 · " +
             fontSizePt +
             "pt)." +
-            (errorCount > 0 ? " Có " + errorCount + " công thức lỗi cú pháp được bỏ qua và tô đỏ." : ""),
+            (errorCount > 0 ? " Có " + errorCount + " lỗi: " + lastTechError : ""),
           errorCount > 0 ? "warn" : "success"
         );
       }
 
       return { totalFound, convertedCount, errorCount, errorItems };
     } catch (err) {
+      const techErr = formatWordApiError(err);
       updateProgressUI(0, 0, 0, 0);
-      showStatus(
-        "Lỗi chuyển LaTeX sang MathType: " + (err && err.message ? err.message : String(err)),
-        "error"
-      );
+      showStatus("Lỗi chuyển LaTeX sang MathType: " + techErr, "error");
       return null;
     } finally {
       setBusy(false, false);
