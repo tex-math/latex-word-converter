@@ -2859,10 +2859,20 @@
       }
     }
 
-    function readNibbleArray() {
-      while (!eof()) {
+    function skipDimensionArray(count) {
+      if (!count || count <= 0) return;
+      let done = 0;
+      while (done < count && !eof()) {
         const b = readU8();
-        if ((b >> 4) === 0x0f || (b & 0x0f) === 0x0f) break;
+        const hi = (b >> 4) & 0x0f;
+        const lo = b & 0x0f;
+        if (hi === 0x0f) {
+          done++;
+          if (done >= count) break;
+        }
+        if (lo === 0x0f) {
+          done++;
+        }
       }
     }
 
@@ -3276,9 +3286,9 @@
           case 18: { // EQN_PREFS
             readU8(); // options
             const sizeCount = readU8();
-            for (let i = 0; i < sizeCount; i++) readNibbleArray();
+            skipDimensionArray(sizeCount);
             const spaceCount = readU8();
-            for (let i = 0; i < spaceCount; i++) readNibbleArray();
+            skipDimensionArray(spaceCount);
             const styleCount = readU8();
             for (let i = 0; i < styleCount; i++) {
               const fontDef = readMtefUInt();
@@ -4142,19 +4152,25 @@
   }
 
   /**
-   * Mã hóa một giá trị kích thước theo định dạng nibble array của MTEF v5.
+   * Mã hóa một mảng kích thước (Dimension Array) chuẩn MTEF v5 EQN_PREFS:
+   * Toàn bộ các kích thước được nén liên tục thành 1 luồng nibble (4-bit, high nibble trước),
+   * mỗi kích thước kết thúc bằng nibble 0xF, và CHỈ đệm thêm 1 nibble 0xF ở cuối mảng nếu tổng số nibble là lẻ.
    * unitCode: 2 = pt, 4 = %
    */
-  function encodeMtefDimensionNibbles(unitCode, valueStr) {
-    const nibbles = [unitCode & 0x0f];
-    const s = String(valueStr);
-    for (let i = 0; i < s.length; i++) {
-      const c = s[i];
-      if (c >= "0" && c <= "9") nibbles.push(c.charCodeAt(0) - 48);
-      else if (c === ".") nibbles.push(0x0a);
-      else if (c === "-") nibbles.push(0x0b);
+  function encodeMtefDimensionArray(dims) {
+    const nibbles = [];
+    for (let d = 0; d < dims.length; d++) {
+      const unitCode = dims[d][0];
+      const s = String(dims[d][1]);
+      nibbles.push(unitCode & 0x0f);
+      for (let i = 0; i < s.length; i++) {
+        const c = s[i];
+        if (c >= "0" && c <= "9") nibbles.push(c.charCodeAt(0) - 48);
+        else if (c === ".") nibbles.push(0x0a);
+        else if (c === "-") nibbles.push(0x0b);
+      }
+      nibbles.push(0x0f);
     }
-    nibbles.push(0x0f);
     if (nibbles.length % 2 === 1) nibbles.push(0x0f);
 
     const out = [];
@@ -4172,35 +4188,39 @@
     const fontSizePt = Number((options && options.fontSizePt) || 12);
     const w = createBinaryWriter(256);
 
-    // 1. MTEF v5 Header
-    w.u8(5); // MTEF version 5
-    w.u8(1); // Platform: Windows
-    w.u8(1); // Product: MathType
-    w.u8(6); // Product version 6
-    w.u8(9); // Product subversion 9
+    // 1. MTEF v5 Header chuẩn MathType 7.0
+    w.u8(5); // Byte 0: MTEF version 5
+    w.u8(1); // Byte 1: Platform = Windows (1)
+    w.u8(0); // Byte 2: Product = MathType (0)
+    w.u8(7); // Byte 3: Product version = MathType 7 (7)
+    w.u8(0); // Byte 4: Product subversion = 0
     w.cstr("DSMT4"); // Application key chuẩn Equation.DSMT4
     w.u8(displayMode ? 0 : 1); // 0 = display equation, 1 = inline equation
 
-    // 2. FONT_DEF (record 17): Times New Roman & Symbol
+    // 2. FONT_DEF (record 17): Times New Roman (encDef=1 MTCode) & Symbol (encDef=3 Symbol)
     w.u8(17); // FONT_DEF #1
-    w.u8(1);  // encDefIndex = 1 (Windows ANSI / MTCode)
+    w.u8(1);  // encDefIndex = 1 (MTCode)
     w.cstr("Times New Roman");
 
     w.u8(17); // FONT_DEF #2
-    w.u8(2);  // encDefIndex = 2 (Symbol)
+    w.u8(3);  // encDefIndex = 3 (Symbol — chuẩn MTEF v5)
     w.cstr("Symbol");
 
     // 3. EQN_PREFS (record 18): thiết lập cỡ chữ mặc định (vd: 12pt) và bảng kiểu chữ Times New Roman
     w.u8(18); // EQN_PREFS
     w.u8(0);  // options
     w.u8(7);  // 7 mức cỡ chữ chuẩn MathType
-    w.bytes(encodeMtefDimensionNibbles(2, String(fontSizePt))); // Full (12pt)
-    w.bytes(encodeMtefDimensionNibbles(4, "58"));  // Subscript (58%)
-    w.bytes(encodeMtefDimensionNibbles(4, "42"));  // Sub-subscript (42%)
-    w.bytes(encodeMtefDimensionNibbles(4, "150")); // Symbol (150%)
-    w.bytes(encodeMtefDimensionNibbles(4, "100")); // Sub-symbol (100%)
-    w.bytes(encodeMtefDimensionNibbles(4, "75"));  // User 1
-    w.bytes(encodeMtefDimensionNibbles(4, "150")); // User 2
+    w.bytes(
+      encodeMtefDimensionArray([
+        [2, String(fontSizePt)], // Full (12pt)
+        [4, "58"],               // Subscript (58%)
+        [4, "42"],               // Sub-subscript (42%)
+        [4, "150"],              // Symbol (150%)
+        [4, "100"],              // Sub-symbol (100%)
+        [4, "75"],               // User 1 (75%)
+        [4, "150"]               // User 2 (150%)
+      ])
+    );
 
     w.u8(0); // spaces count (dùng mặc định của MathType)
 
@@ -4496,17 +4516,30 @@
   }
 
   /**
-   * Đóng gói luồng byte MTEF vào cấu trúc chuẩn luồng "Equation Native"
+   * CLSID chuẩn của Design Science / Wiris MathType 7.0 (Equation.DSMT4) theo thứ tự Little-Endian:
+   * {0002CE02-0000-0000-C000-000000000046}
+   */
+  const MATHTYPE7_CLSID = new Uint8Array([
+    0x02, 0xce, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46
+  ]);
+
+  /**
+   * Đóng gói luồng byte MTEF v5 vào cấu trúc chuẩn luồng "Equation Native"
    * (Header 28-byte EQNOLEFILEHDR chuẩn Design Science MathType:
-   *  cbHdr = 28, version = 0x00020000, cf = 0x0008, cbObject, nReserved[4]).
+   *  cbHdr = 28, version = 0x00020000, cf = 0x0008, cbObject = độ dài MTEF thực tế, nReserved[4]).
+   * Tự động đệm thêm byte 0x00 ở cuối để tổng dung lượng luồng đạt tối thiểu 4096 bytes,
+   * đảm bảo luồng nằm hoàn toàn trong các FAT Sector 512-byte chuẩn (không dùng MiniFAT).
    */
   function wrapMtefInEquationNative(mtefBytes) {
-    const out = new Uint8Array(28 + mtefBytes.length);
+    const rawLen = 28 + mtefBytes.length;
+    const paddedLen = Math.max(4096, Math.ceil(rawLen / 512) * 512);
+    const out = new Uint8Array(paddedLen); // Mặc định khởi tạo toàn bộ là 0x00
     const dv = new DataView(out.buffer);
     dv.setUint16(0, 28, true);               // cbHdr = 28 bytes
     dv.setUint32(2, 0x00020000, true);       // version = 2.0 (0x00020000)
     dv.setUint16(6, 0x0008, true);           // cf = 0x0008 (chuẩn Design Science MathType)
-    dv.setUint32(8, mtefBytes.length, true); // cbObject = kích thước luồng MTEF
+    dv.setUint32(8, mtefBytes.length, true); // cbObject = độ dài thực tế của mảng MTEF v5
     dv.setUint32(12, 0, true);               // nReserved1
     dv.setUint32(16, 0, true);               // nReserved2
     dv.setUint32(20, 0, true);               // nReserved3
@@ -4516,36 +4549,36 @@
   }
 
   /**
-   * Tạo luồng "\x01CompObj" chuẩn OLE để Word & MathType nhận diện ProgID "Equation.DSMT4".
+   * Tạo luồng "\x01CompObj" chuẩn OLE2 cho MathType 7.0:
+   * - CLSID: {0002CE02-0000-0000-C000-000000000046}
+   * - UserType: "MathType 7.0 Equation" (độ dài kèm ký tự null \0 = 22 bytes)
+   * - ProgID: "Equation.DSMT4" (độ dài kèm ký tự null \0 = 15 bytes)
    */
   function buildCompObjStream() {
     const w = createBinaryWriter(128);
-    const userType = "MathType 6.0 Equation";
+    const userType = "MathType 7.0 Equation";
     const progId = "Equation.DSMT4";
 
     w.u16(0x0001); // Version
-    w.u16(0xfffe); // Byte order
+    w.u16(0xfffe); // Byte order (little-endian)
     w.u32(0x00000a03); // OS version (Win32)
     w.u32(0xffffffff); // Reserved
 
-    // CLSID {0002CE03-0000-0000-C000-000000000046} (Equation.DSMT4)
-    w.bytes(new Uint8Array([
-      0x03, 0xce, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46
-    ]));
+    // 16-byte CLSID chuẩn Design Science / Wiris MathType 7.0
+    w.bytes(MATHTYPE7_CLSID);
 
-    w.u32(userType.length + 1);
+    w.u32(userType.length + 1); // Độ dài UserType gồm cả ký tự kết thúc null '\0'
     w.cstr(userType);
 
     w.u32(0); // Clipboard format = none
 
-    w.u32(progId.length + 1);
+    w.u32(progId.length + 1); // Độ dài ProgID gồm cả ký tự kết thúc null '\0'
     w.cstr(progId);
 
     w.u32(0x71b239f4); // Unicode marker
-    w.u32(0);
-    w.u32(0);
-    w.u32(0);
+    w.u32(0); // UnicodeUserType length = 0
+    w.u32(0); // UnicodeClipboardFormat length = 0
+    w.u32(0); // Reserved2 length = 0
     return w.toUint8Array();
   }
 
@@ -4687,14 +4720,9 @@
       dv.setUint32(120, size >>> 0, true);
     }
 
-    // CLSID chuẩn của MathType Equation.DSMT4: {0002CE03-0000-0000-C000-000000000046}
-    const mtClsid = new Uint8Array([
-      0x03, 0xce, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46
-    ]);
-
+    // Ghi CLSID chuẩn Design Science / Wiris MathType 7.0 vào Root Entry (offset 0x50 = byte 80)
     // Cây đỏ-đen MS-CFB hợp lệ theo thứ tự độ dài tên: "\x01Ole" (4) < "\x01CompObj" (8) < "Equation Native" (15)
-    writeDirEntry(0, "Root Entry", 5, 1, NOSTREAM, NOSTREAM, 1, firstMiniStreamSect, miniStreamBytes.length, mtClsid);
+    writeDirEntry(0, "Root Entry", 5, 1, NOSTREAM, NOSTREAM, 1, firstMiniStreamSect, miniStreamBytes.length, MATHTYPE7_CLSID);
     const m1 = streamMeta.get(1);
     const m2 = streamMeta.get(2);
     const m3 = streamMeta.get(3);
@@ -5169,228 +5197,764 @@
   }
 
   /**
-   * Bước 1 của quy trình MathType:
-   * Dùng Temml cục bộ (./temml.min.js) chuyển LaTeX sang MathML/HTML, đo kích thước thực tế
-   * khớp dòng chữ Times New Roman (vd: 12pt), rồi vẽ lên <canvas> ẩn qua
-   * <svg><foreignObject>...</foreignObject></svg> ở độ phân giải cao (scale = 2)
-   * để xuất ảnh PNG Base64 sắc nét. Tự động dự phòng sang renderAstPreviewPng (Canvas 2D scale=2)
-   * nếu trình duyệt/WebView chặn foreignObject toDataURL (SecurityError) hoặc vẽ rỗng.
+   * Bộ tạo tệp nhị phân Vector EMF (Windows Enhanced Metafile — MS-EMF) thuần JavaScript
+   * bằng Uint8Array & DataView (1 pt = 20 logical units, 1440 DPI chuẩn Word twips).
+   * Sinh đầy đủ các bản ghi GDI:
+   * - EMR_HEADER (108 bytes), EMR_SETMAPMODE, EMR_SETWINDOWEXTEX/VIEWPORTEXTEX
+   * - EMR_SETBKMODE (TRANSPARENT), EMR_SETTEXTCOLOR, EMR_SETTEXTALIGN (TA_LEFT | TA_BASELINE)
+   * - EMR_EXTCREATEFONTINDIRECTW (Times New Roman, in nghiêng cho biến, đứng cho số & phép toán)
+   * - EMR_EXTTEXTOUTW (UTF-16LE + OutputDx), EMR_CREATEPEN + EMR_MOVETOEX + EMR_LINETO
+   * - EMR_DELETEOBJECT giải phóng handle GDI & EMR_EOF.
+   *
+   * Trả về { emfBase64, emfBytes, widthPt, heightPt, depthPt } với depthPt là khoảng cách
+   * từ đường cơ sở (baseline của dấu '=') xuống đáy công thức để căn <w:position> chuẩn xác.
    */
-  async function renderLatexToPngBase64(latex, astNodes, fontSizePt, displayMode) {
-    const fallback = () => {
-      const res = renderAstPreviewPng(astNodes, fontSizePt, displayMode);
-      return {
-        imageBase64: res.pngBase64,
-        widthPt: res.widthPt,
-        heightPt: res.heightPt,
-        descentPt: res.descentPt
-      };
-    };
+  function renderAstToEmf(astNodes, fontSizePt, displayMode) {
+    const UNITS_PER_PT = 20; // 1 pt = 20 twips (1440 DPI -> khớp hoàn toàn đơn vị dxa của Word)
+    const baseSizePt = Number(fontSizePt || 12) * (displayMode ? 1.08 : 1.0);
+    const baseSizeU = Math.round(baseSizePt * UNITS_PER_PT);
 
-    if (
-      typeof document === "undefined" ||
-      typeof Image === "undefined" ||
-      typeof temml === "undefined" ||
-      typeof temml.renderToString !== "function"
-    ) {
-      return fallback();
-    }
-
-    const canvas = dom.mtPreviewCanvas || document.createElement("canvas");
-    if (!canvas || typeof canvas.getContext !== "function") {
-      return fallback();
-    }
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      return fallback();
-    }
-
-    const clean = stripOuterDelimiters(latex);
-    const ptToPx = 96 / 72;
-    const scale = 2;
-    const padX = Math.max(2, Math.ceil(fontSizePt * ptToPx * 0.16));
-    const padY = Math.max(2, Math.ceil(fontSizePt * ptToPx * 0.12));
-
-    let mathmlHtml = "";
+    // Dùng Canvas 2D ẩn (nếu có) để đo bề rộng ký tự Times New Roman chính xác hơn; nếu không có thì dùng bảng tỷ lệ chuẩn
+    let measureCtx = null;
     try {
-      mathmlHtml = renderLatexToMathML(clean, displayMode);
-    } catch {
-      return fallback();
-    }
-
-    // Đo kích thước hiển thị thực tế của MathML trong DOM ẩn (Times New Roman đúng fontSizePt)
-    let cssW = 0;
-    let cssH = 0;
-    let descentPx = fontSizePt * ptToPx * 0.22;
-
-    if (document.body && typeof document.createElement === "function") {
-      const probe = document.createElement("div");
-      probe.style.position = "fixed";
-      probe.style.left = "-99999px";
-      probe.style.top = "-99999px";
-      probe.style.visibility = "hidden";
-      probe.style.pointerEvents = "none";
-      probe.style.display = "inline-block";
-      probe.style.whiteSpace = "nowrap";
-      probe.style.padding = padY + "px " + padX + "px";
-      probe.style.fontFamily = '"Times New Roman", "Cambria Math", Georgia, serif';
-      probe.style.fontSize = fontSizePt + "pt";
-      probe.style.lineHeight = "1.15";
-      probe.style.color = "#000000";
-      try {
-        temml.render(clean, probe, {
-          displayMode: Boolean(displayMode),
-          throwOnError: true
-        });
-        document.body.appendChild(probe);
-        const rect = probe.getBoundingClientRect();
-        cssW = Math.ceil(rect.width || 0);
-        cssH = Math.ceil(rect.height || 0);
-
-        // Ước lượng khoảng descent để căn khớp baseline chữ Times New Roman 12pt
-        if (cssH > fontSizePt * ptToPx * 1.6) {
-          descentPx = Math.max(fontSizePt * ptToPx * 0.25, (cssH - fontSizePt * ptToPx * 0.72) * 0.45);
-        }
-      } catch {
-        cssW = 0;
-        cssH = 0;
-      } finally {
-        if (probe.parentNode) probe.parentNode.removeChild(probe);
+      const c = dom.mtPreviewCanvas || (typeof document !== "undefined" ? document.createElement("canvas") : null);
+      if (c && typeof c.getContext === "function") {
+        measureCtx = c.getContext("2d");
       }
+    } catch {
+      measureCtx = null;
     }
 
-    // Nếu không đo được bằng DOM (vd môi trường headless), lấy kích thước từ Canvas 2D fallback
-    if (cssW < 8 || cssH < 8) {
-      return fallback();
+    function estimateCharWidthRatio(ch, italic, bold) {
+      if (ch === " ") return 0.28;
+      if ("iljtI1.,;:'|!()[]".indexOf(ch) !== -1) return italic ? 0.34 : 0.32;
+      if ("fr".indexOf(ch) !== -1) return 0.38;
+      if ("mwMW∑∏∫∬∭∮∞⇔⇒".indexOf(ch) !== -1) return 0.80;
+      if (/[A-Z]/.test(ch)) return bold ? 0.72 : 0.68;
+      if (/[0-9]/.test(ch)) return 0.52;
+      if ("+-−=<>≤≥≠≈±×÷·∈→".indexOf(ch) !== -1) return 0.58;
+      return bold ? 0.54 : 0.50;
     }
 
-    // Gói MathML vào SVG <foreignObject> tự chứa hoàn toàn (không tham chiếu tài nguyên ngoài)
-    const svgXml =
-      '<svg xmlns="http://www.w3.org/2000/svg" width="' +
-      cssW +
-      '" height="' +
-      cssH +
-      '" viewBox="0 0 ' +
-      cssW +
-      " " +
-      cssH +
-      '">' +
-        '<foreignObject x="0" y="0" width="100%" height="100%">' +
-          '<div xmlns="http://www.w3.org/1999/xhtml" style="' +
-            "margin:0;padding:" + padY + "px " + padX + "px;" +
-            "width:" + cssW + "px;height:" + cssH + "px;box-sizing:border-box;" +
-            "display:flex;align-items:center;justify-content:center;" +
-            "font-family:'Times New Roman','Cambria Math',Georgia,serif;" +
-            "font-size:" + fontSizePt + "pt;line-height:1.15;color:#000000;background:transparent;" +
-          '">' +
-            mathmlHtml +
-          "</div>" +
-        "</foreignObject>" +
-      "</svg>";
-
-    const svgDataUrl = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgXml);
-
-    try {
-      const renderedBase64 = await new Promise((resolve, reject) => {
-        const img = new Image();
-        let settled = false;
-        const timer = setTimeout(() => {
-          if (!settled) {
-            settled = true;
-            reject(new Error("Quá thời gian dựng ảnh SVG MathML."));
+    function measureCharAdvanceU(ch, sizeU, italic, bold) {
+      if (measureCtx) {
+        try {
+          const pxSize = (sizeU / UNITS_PER_PT) * (96 / 72);
+          const stylePrefix = (italic ? "italic " : "") + (bold ? "bold " : "");
+          measureCtx.font = stylePrefix + Math.max(6, pxSize).toFixed(2) + 'px "Times New Roman", serif';
+          const wPx = measureCtx.measureText(ch).width;
+          if (wPx > 0) {
+            return Math.max(Math.round(sizeU * 0.20), Math.round((wPx * 72 / 96) * UNITS_PER_PT));
           }
-        }, 1200);
+        } catch {
+          // Rơi về bảng đo chuẩn
+        }
+      }
+      return Math.max(Math.round(sizeU * 0.22), Math.round(sizeU * estimateCharWidthRatio(ch, italic, bold)));
+    }
 
-        img.onload = () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          try {
-            canvas.width = Math.max(16, Math.ceil(cssW * scale));
-            canvas.height = Math.max(16, Math.ceil(cssH * scale));
-            ctx.setTransform(scale, 0, 0, scale, 0, 0);
-            ctx.clearRect(0, 0, cssW, cssH);
-            ctx.drawImage(img, 0, 0, cssW, cssH);
+    function measureTextRun(text, sizeU, italic, bold) {
+      const str = String(text || "");
+      const dx = [];
+      let totalW = 0;
+      for (let i = 0; i < str.length; i++) {
+        const adv = measureCharAdvanceU(str[i], sizeU, italic, bold);
+        dx.push(adv);
+        totalW += adv;
+      }
+      // Bù nhẹ độ nghiêng bên phải (italic overhang) cho biến chữ nghiêng để không bị cắt sát mép
+      const italicExtra = italic && str.length > 0 ? Math.round(sizeU * 0.08) : 0;
+      const ascent = Math.round(sizeU * 0.80);
+      const descent = Math.round(sizeU * 0.24);
+      return {
+        width: totalW + italicExtra,
+        ascent,
+        descent,
+        draw: (emf, x, baselineY) => {
+          if (!str) return;
+          emf.drawText(str, dx, x, baselineY, sizeU, italic, bold, totalW + italicExtra);
+        }
+      };
+    }
 
-            // Kiểm tra pixel thực tế để bảo đảm WebView không vẽ ảnh trong suốt rỗng
-            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-            let hasInk = false;
-            for (let p = 3; p < imgData.length; p += 16) {
-              if (imgData[p] > 10) {
-                hasInk = true;
-                break;
-              }
+    function layoutSeq(nodes, sizeU) {
+      const boxes = [];
+      for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
+        const next = nodes[i + 1];
+
+        if (next && next.kind === "script" && node.kind !== "nary" && node.kind !== "lim") {
+          const baseBox = layoutNode(node, sizeU);
+          const scriptSizeU = Math.max(100, Math.round(sizeU * 0.64));
+          const subBox = next.sub ? layoutSeq(next.sub, scriptSizeU) : null;
+          const supBox = next.sup ? layoutSeq(next.sup, scriptSizeU) : null;
+          const scriptW = Math.max(subBox ? subBox.width : 0, supBox ? supBox.width : 0);
+          const supRaise = Math.round(sizeU * 0.42);
+          const subDrop = Math.round(sizeU * 0.26);
+          const gapX = Math.round(sizeU * 0.04);
+          const ascent = Math.max(baseBox.ascent, supBox ? supRaise + supBox.ascent : 0);
+          const descent = Math.max(baseBox.descent, subBox ? subDrop + subBox.descent : 0);
+
+          boxes.push({
+            width: baseBox.width + gapX + scriptW,
+            ascent,
+            descent,
+            draw: (emf, x, y) => {
+              baseBox.draw(emf, x, y);
+              if (supBox) supBox.draw(emf, x + baseBox.width + gapX, y - supRaise);
+              if (subBox) subBox.draw(emf, x + baseBox.width + gapX, y + subDrop);
             }
-            if (!hasInk) {
-              reject(new Error("WebView dựng ảnh SVG foreignObject rỗng."));
-              return;
-            }
+          });
+          i += 1;
+        } else {
+          boxes.push(layoutNode(node, sizeU));
+        }
+      }
 
-            const dataUrl = canvas.toDataURL("image/png");
-            const b64 = dataUrl.replace(/^data:image\/png;base64,/, "");
-            if (!b64) {
-              reject(new Error("Không xuất được PNG Base64 từ canvas."));
-              return;
-            }
-            resolve(b64);
-          } catch (drawErr) {
-            reject(drawErr);
-          }
-        };
-
-        img.onerror = () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          reject(new Error("Không thể nạp ảnh SVG MathML."));
-        };
-
-        img.src = svgDataUrl;
+      let totalW = 0;
+      let maxAsc = Math.round(sizeU * 0.76);
+      let maxDesc = Math.round(sizeU * 0.22);
+      boxes.forEach((b) => {
+        totalW += b.width;
+        if (b.ascent > maxAsc) maxAsc = b.ascent;
+        if (b.descent > maxDesc) maxDesc = b.descent;
       });
 
       return {
-        imageBase64: renderedBase64,
-        widthPt: Number((cssW / ptToPx).toFixed(2)),
-        heightPt: Number((cssH / ptToPx).toFixed(2)),
-        descentPt: Number((descentPx / ptToPx).toFixed(2))
+        width: totalW,
+        ascent: maxAsc,
+        descent: maxDesc,
+        draw: (emf, x, y) => {
+          let cx = x;
+          boxes.forEach((b) => {
+            b.draw(emf, cx, y);
+            cx += b.width;
+          });
+        }
       };
-    } catch {
-      // Dự phòng an toàn sang bộ vẽ Canvas 2D thuần (scale=2, không bao giờ bị taint canvas)
-      return fallback();
     }
+
+    function layoutNode(node, sizeU) {
+      if (!node) return { width: 0, ascent: 0, descent: 0, draw: () => {} };
+
+      switch (node.kind) {
+        case "char": {
+          const isItalic = node.tf === MT_FN_VARIABLE || node.tf === MT_FN_LCGREEK;
+          const isBold = node.tf === MT_FN_VECTOR;
+          const isBinaryOp = /^[+=−<>≤≥≠≈±×÷·∈→⇒⇔]$/.test(node.ch || "");
+          const pad = isBinaryOp ? Math.round(sizeU * 0.16) : 0;
+          const inner = measureTextRun(node.ch || "", sizeU, isItalic, isBold);
+          return {
+            width: inner.width + pad * 2,
+            ascent: inner.ascent,
+            descent: inner.descent,
+            draw: (emf, x, y) => inner.draw(emf, x + pad, y)
+          };
+        }
+
+        case "space":
+          return { width: Math.round(sizeU * 0.26), ascent: Math.round(sizeU * 0.5), descent: 0, draw: () => {} };
+
+        case "text":
+          return measureTextRun(node.text || "", sizeU, false, node.tf === MT_FN_VECTOR);
+
+        case "func": {
+          const b = measureTextRun(node.name || "", sizeU, false, false);
+          return {
+            width: b.width + Math.round(sizeU * 0.14),
+            ascent: b.ascent,
+            descent: b.descent,
+            draw: (emf, x, y) => b.draw(emf, x, y)
+          };
+        }
+
+        case "group":
+          return layoutSeq(node.items || [], sizeU);
+
+        case "script": {
+          const scriptSizeU = Math.max(100, Math.round(sizeU * 0.64));
+          const subBox = node.sub ? layoutSeq(node.sub, scriptSizeU) : null;
+          const supBox = node.sup ? layoutSeq(node.sup, scriptSizeU) : null;
+          const w = Math.max(subBox ? subBox.width : 0, supBox ? supBox.width : 0);
+          const supRaise = Math.round(sizeU * 0.42);
+          const subDrop = Math.round(sizeU * 0.26);
+          return {
+            width: w + Math.round(sizeU * 0.05),
+            ascent: supBox ? supRaise + supBox.ascent : Math.round(sizeU * 0.5),
+            descent: subBox ? subDrop + subBox.descent : Math.round(sizeU * 0.22),
+            draw: (emf, x, y) => {
+              if (supBox) supBox.draw(emf, x, y - supRaise);
+              if (subBox) subBox.draw(emf, x, y + subDrop);
+            }
+          };
+        }
+
+        case "frac": {
+          const childSizeU = Math.max(120, Math.round(sizeU * 0.88));
+          const numBox = layoutSeq(node.num || [], childSizeU);
+          const denBox = layoutSeq(node.den || [], childSizeU);
+          const barPad = Math.round(sizeU * 0.16);
+          const sideMargin = Math.round(sizeU * 0.08);
+          const barW = Math.max(numBox.width, denBox.width) + barPad * 2;
+          // Trục toán học (ngang giữa dấu '=' và gạch phân số) nằm trên baseline 0.30 * sizeU
+          const axisOffset = Math.round(sizeU * 0.30);
+          const gap = Math.round(sizeU * 0.14);
+          const strokeU = Math.max(10, Math.round(sizeU * 0.055));
+          const ascent = axisOffset + gap + numBox.descent + numBox.ascent;
+          const descent = Math.max(Math.round(sizeU * 0.24), gap + denBox.ascent + denBox.descent - axisOffset);
+
+          return {
+            width: barW + sideMargin * 2,
+            ascent,
+            descent,
+            draw: (emf, x, y) => {
+              const bx = x + sideMargin;
+              const lineY = y - axisOffset;
+              numBox.draw(emf, bx + Math.round((barW - numBox.width) / 2), lineY - gap - numBox.descent);
+              denBox.draw(emf, bx + Math.round((barW - denBox.width) / 2), lineY + gap + denBox.ascent);
+              emf.drawLine(bx, lineY, bx + barW, lineY, strokeU);
+            }
+          };
+        }
+
+        case "root": {
+          const bodyBox = layoutSeq(node.body || [], sizeU);
+          const degSizeU = Math.max(96, Math.round(sizeU * 0.56));
+          const degBox = node.deg && node.deg.length > 0 ? layoutSeq(node.deg, degSizeU) : null;
+          const radW = Math.round(sizeU * 0.58);
+          const degW = degBox ? Math.max(0, degBox.width - Math.round(radW * 0.42)) : 0;
+          const topPad = Math.round(sizeU * 0.18);
+          const strokeU = Math.max(10, Math.round(sizeU * 0.055));
+          const ascent = Math.max(bodyBox.ascent + topPad, degBox ? degBox.ascent + Math.round(sizeU * 0.54) : 0);
+          const descent = Math.max(bodyBox.descent, Math.round(sizeU * 0.22));
+          const tailPad = Math.round(sizeU * 0.12);
+
+          return {
+            width: degW + radW + bodyBox.width + tailPad,
+            ascent,
+            descent,
+            draw: (emf, x, y) => {
+              const rx = x + degW;
+              const topY = y - bodyBox.ascent - topPad + Math.round(strokeU * 0.5);
+              const botY = y + Math.min(bodyBox.descent, Math.round(sizeU * 0.18));
+              if (degBox) {
+                degBox.draw(emf, x, y - Math.round(sizeU * 0.42));
+              }
+              emf.drawPolyline(
+                [
+                  [rx + Math.round(radW * 0.05), y - Math.round(sizeU * 0.20)],
+                  [rx + Math.round(radW * 0.24), y - Math.round(sizeU * 0.28)],
+                  [rx + Math.round(radW * 0.48), botY],
+                  [rx + Math.round(radW * 0.88), topY],
+                  [rx + radW + bodyBox.width + Math.round(tailPad * 0.6), topY]
+                ],
+                strokeU
+              );
+              bodyBox.draw(emf, rx + radW, y);
+            }
+          };
+        }
+
+        case "fence": {
+          const bodyBox = layoutSeq(node.body || [], sizeU);
+          const left = node.left && node.left !== "." ? node.left : "";
+          const right = node.right && node.right !== "." ? node.right : "";
+          const totalH = bodyBox.ascent + bodyBox.descent;
+          const delimSizeU = Math.max(sizeU, Math.min(Math.round(totalH * 0.96), Math.round(sizeU * 2.5)));
+          const lBox = left ? measureTextRun(left, delimSizeU, false, false) : { width: 0, ascent: 0, descent: 0, draw: () => {} };
+          const rBox = right ? measureTextRun(right, delimSizeU, false, false) : { width: 0, ascent: 0, descent: 0, draw: () => {} };
+          const delimYOffset = Math.round((bodyBox.descent - bodyBox.ascent) / 2 + delimSizeU * 0.28);
+          const pad = Math.round(sizeU * 0.04);
+
+          return {
+            width: lBox.width + bodyBox.width + rBox.width + pad * 2,
+            ascent: Math.max(bodyBox.ascent, Math.round(delimSizeU * 0.72)),
+            descent: Math.max(bodyBox.descent, Math.round(delimSizeU * 0.24)),
+            draw: (emf, x, y) => {
+              if (left) lBox.draw(emf, x, y + delimYOffset);
+              bodyBox.draw(emf, x + lBox.width + pad, y);
+              if (right) rBox.draw(emf, x + lBox.width + bodyBox.width + pad, y + delimYOffset);
+            }
+          };
+        }
+
+        case "nary": {
+          const symMap = {
+            int: "∫", iint: "∬", iiint: "∭", oint: "∮",
+            sum: "∑", prod: "∏", coprod: "∐", bigcup: "⋃", bigcap: "⋂"
+          };
+          const sym = symMap[node.op] || "∫";
+          const bigSizeU = Math.round(sizeU * 1.55);
+          const limSizeU = Math.max(96, Math.round(sizeU * 0.62));
+          const symBox = measureTextRun(sym, bigSizeU, false, false);
+          const subBox = node.sub ? layoutSeq(node.sub, limSizeU) : null;
+          const supBox = node.sup ? layoutSeq(node.sup, limSizeU) : null;
+          const isInt = (node.op || "").indexOf("int") !== -1;
+
+          if (isInt) {
+            const limW = Math.max(subBox ? subBox.width : 0, supBox ? supBox.width : 0);
+            const supY = Math.round(sizeU * 0.84);
+            const subY = Math.round(sizeU * 0.56);
+            return {
+              width: symBox.width + limW + Math.round(sizeU * 0.18),
+              ascent: Math.max(Math.round(symBox.ascent * 0.88), supBox ? supY + supBox.ascent : 0),
+              descent: Math.max(symBox.descent + Math.round(sizeU * 0.22), subBox ? subY + subBox.descent : 0),
+              draw: (emf, x, y) => {
+                symBox.draw(emf, x, y + Math.round(sizeU * 0.16));
+                if (supBox) supBox.draw(emf, x + symBox.width + Math.round(sizeU * 0.04), y - supY);
+                if (subBox) subBox.draw(emf, x + symBox.width - Math.round(sizeU * 0.02), y + subY);
+              }
+            };
+          }
+
+          const colW = Math.max(symBox.width, subBox ? subBox.width : 0, supBox ? supBox.width : 0);
+          const vGap = Math.round(sizeU * 0.10);
+          const asc = Math.round(symBox.ascent * 0.82) + (supBox ? supBox.ascent + supBox.descent + vGap : 0);
+          const desc = symBox.descent + Math.round(sizeU * 0.12) + (subBox ? subBox.ascent + subBox.descent + vGap : 0);
+          return {
+            width: colW + Math.round(sizeU * 0.20),
+            ascent: asc,
+            descent: desc,
+            draw: (emf, x, y) => {
+              symBox.draw(emf, x + Math.round((colW - symBox.width) / 2), y + Math.round(sizeU * 0.12));
+              if (supBox) {
+                supBox.draw(
+                  emf,
+                  x + Math.round((colW - supBox.width) / 2),
+                  y - Math.round(symBox.ascent * 0.82) - supBox.descent - vGap
+                );
+              }
+              if (subBox) {
+                subBox.draw(
+                  emf,
+                  x + Math.round((colW - subBox.width) / 2),
+                  y + symBox.descent + Math.round(sizeU * 0.12) + subBox.ascent + vGap
+                );
+              }
+            }
+          };
+        }
+
+        case "lim": {
+          const limBox = measureTextRun("lim", sizeU, false, false);
+          const subBox = node.sub ? layoutSeq(node.sub, Math.max(96, Math.round(sizeU * 0.62))) : null;
+          const colW = Math.max(limBox.width, subBox ? subBox.width : 0);
+          const vGap = Math.round(sizeU * 0.08);
+          return {
+            width: colW + Math.round(sizeU * 0.20),
+            ascent: limBox.ascent,
+            descent: limBox.descent + (subBox ? subBox.ascent + subBox.descent + vGap : 0),
+            draw: (emf, x, y) => {
+              limBox.draw(emf, x + Math.round((colW - limBox.width) / 2), y);
+              if (subBox) {
+                subBox.draw(emf, x + Math.round((colW - subBox.width) / 2), y + limBox.descent + subBox.ascent + vGap);
+              }
+            }
+          };
+        }
+
+        case "accent": {
+          const bodyBox = layoutSeq(node.body || [], sizeU);
+          const strokeU = Math.max(10, Math.round(sizeU * 0.055));
+          const extraTop = node.cmd === "underline" ? 0 : Math.round(sizeU * 0.30);
+          const extraBot = node.cmd === "underline" ? Math.round(sizeU * 0.22) : 0;
+          const pad = Math.round(sizeU * 0.06);
+          return {
+            width: bodyBox.width + pad * 2,
+            ascent: bodyBox.ascent + extraTop,
+            descent: bodyBox.descent + extraBot,
+            draw: (emf, x, y) => {
+              const bx = x + pad;
+              bodyBox.draw(emf, bx, y);
+              if (node.cmd === "underline") {
+                const uy = y + bodyBox.descent + Math.round(sizeU * 0.10);
+                emf.drawLine(bx, uy, bx + bodyBox.width, uy, strokeU);
+              } else if (node.cmd === "vec" || node.cmd === "overrightarrow") {
+                const ay = y - bodyBox.ascent - Math.round(sizeU * 0.12);
+                const head = Math.max(24, Math.round(sizeU * 0.16));
+                emf.drawLine(bx, ay, bx + bodyBox.width, ay, strokeU);
+                emf.drawPolyline(
+                  [
+                    [bx + bodyBox.width - head, ay - Math.round(head * 0.7)],
+                    [bx + bodyBox.width, ay],
+                    [bx + bodyBox.width - head, ay + Math.round(head * 0.7)]
+                  ],
+                  strokeU
+                );
+              } else if (node.cmd === "hat" || node.cmd === "widehat") {
+                const hy = y - bodyBox.ascent - Math.round(sizeU * 0.08);
+                emf.drawPolyline(
+                  [
+                    [bx, hy],
+                    [bx + Math.round(bodyBox.width / 2), hy - Math.round(sizeU * 0.18)],
+                    [bx + bodyBox.width, hy]
+                  ],
+                  strokeU
+                );
+              } else {
+                const oy = y - bodyBox.ascent - Math.round(sizeU * 0.10);
+                emf.drawLine(bx, oy, bx + bodyBox.width, oy, strokeU);
+              }
+            }
+          };
+        }
+
+        case "env": {
+          const cellSizeU = Math.max(120, Math.round(sizeU * 0.92));
+          const rows = (node.rows || []).map((r) => r.map((cell) => layoutSeq(cell, cellSizeU)));
+          const rowCount = rows.length || 1;
+          const colCount = Math.max(1, ...rows.map((r) => r.length));
+          const colWidths = new Array(colCount).fill(0);
+          const rowHeights = rows.map((r) => {
+            let maxA = Math.round(cellSizeU * 0.74);
+            let maxD = Math.round(cellSizeU * 0.24);
+            r.forEach((cell, cIdx) => {
+              if (cell.width > colWidths[cIdx]) colWidths[cIdx] = cell.width;
+              if (cell.ascent > maxA) maxA = cell.ascent;
+              if (cell.descent > maxD) maxD = cell.descent;
+            });
+            return { ascent: maxA, descent: maxD };
+          });
+
+          const colGap = Math.round(sizeU * 0.50);
+          const rowGap = Math.round(sizeU * 0.28);
+          const gridW = colWidths.reduce((a, b) => a + b, 0) + colGap * Math.max(0, colCount - 1);
+          const totalH =
+            rowHeights.reduce((a, r) => a + r.ascent + r.descent, 0) +
+            rowGap * Math.max(0, rowCount - 1);
+          const leftDelim = node.env === "cases" ? "{" : node.env === "pmatrix" ? "(" : node.env === "bmatrix" ? "[" : "";
+          const rightDelim = node.env === "pmatrix" ? ")" : node.env === "bmatrix" ? "]" : "";
+          const delimSizeU = Math.min(Math.round(totalH * 1.02), Math.round(sizeU * 3.2));
+          const lBox = leftDelim ? measureTextRun(leftDelim, delimSizeU, false, false) : { width: 0, draw: () => {} };
+          const rBox = rightDelim ? measureTextRun(rightDelim, delimSizeU, false, false) : { width: 0, draw: () => {} };
+          const halfH = Math.round(totalH / 2);
+          const axisOffset = Math.round(sizeU * 0.28);
+
+          return {
+            width: lBox.width + gridW + rBox.width + Math.round(sizeU * 0.16),
+            ascent: halfH + axisOffset,
+            descent: Math.max(Math.round(sizeU * 0.24), halfH - axisOffset),
+            draw: (emf, x, y) => {
+              const topY = y - halfH - axisOffset;
+              if (leftDelim) {
+                lBox.draw(emf, x, topY + Math.round(totalH * 0.78));
+              }
+              let cy = topY;
+              for (let r = 0; r < rows.length; r++) {
+                const rh = rowHeights[r];
+                let cx = x + lBox.width + Math.round(sizeU * 0.08);
+                for (let col = 0; col < rows[r].length; col++) {
+                  const cell = rows[r][col];
+                  const alignX = node.env === "cases" ? cx : cx + Math.round((colWidths[col] - cell.width) / 2);
+                  cell.draw(emf, alignX, cy + rh.ascent);
+                  cx += colWidths[col] + colGap;
+                }
+                cy += rh.ascent + rh.descent + rowGap;
+              }
+              if (rightDelim) {
+                rBox.draw(emf, x + lBox.width + gridW + Math.round(sizeU * 0.10), topY + Math.round(totalH * 0.78));
+              }
+            }
+          };
+        }
+
+        default:
+          return { width: 0, ascent: 0, descent: 0, draw: () => {} };
+      }
+    }
+
+    // 1. Tính toán bố cục vector toàn công thức theo đơn vị logical units (20 units = 1 pt)
+    const rootBox = layoutSeq(astNodes, baseSizeU);
+    const padX = Math.round(baseSizeU * 0.14);
+    const padY = Math.round(baseSizeU * 0.10);
+    const widthU = Math.max(120, Math.ceil(rootBox.width + padX * 2));
+    const heightU = Math.max(160, Math.ceil(rootBox.ascent + rootBox.descent + padY * 2));
+    const baselineY = padY + rootBox.ascent;
+    const depthU = heightU - baselineY; // Độ sâu từ đường cơ sở (dấu '=') xuống đáy công thức
+
+    const widthPt = Number((widthU / UNITS_PER_PT).toFixed(2));
+    const heightPt = Number((heightU / UNITS_PER_PT).toFixed(2));
+    const depthPt = Number((depthU / UNITS_PER_PT).toFixed(2));
+
+    // 2. Bộ ghi bản ghi nhị phân MS-EMF (4-byte aligned records)
+    const chunks = [];
+    let totalBytes = 0;
+    let recordCount = 0;
+
+    function pushRecord(buf) {
+      chunks.push(buf);
+      totalBytes += buf.length;
+      recordCount += 1;
+    }
+
+    function makeRec(type, size) {
+      const buf = new Uint8Array(size);
+      const dv = new DataView(buf.buffer);
+      dv.setUint32(0, type, true);
+      dv.setUint32(4, size, true);
+      return { buf, dv };
+    }
+
+    function writeUtf16Fixed(dv, byteOffset, str, maxChars) {
+      const len = Math.min(str.length, maxChars - 1);
+      for (let i = 0; i < len; i++) {
+        dv.setUint16(byteOffset + i * 2, str.charCodeAt(i), true);
+      }
+      dv.setUint16(byteOffset + len * 2, 0, true);
+    }
+
+    // Bản ghi 0: EMR_HEADER (108 bytes — sẽ cập nhật lại nBytes, nRecords, nHandles ở bước cuối)
+    const headerRec = makeRec(1, 108);
+    const hdv = headerRec.dv;
+    // rclBounds (inclusive logical/device units)
+    hdv.setInt32(8, 0, true);
+    hdv.setInt32(12, 0, true);
+    hdv.setInt32(16, widthU, true);
+    hdv.setInt32(20, heightU, true);
+    // rclFrame (0.01 mm HIMETRIC: 1 pt = 2540/72 = 35.2778)
+    const frameW = Math.max(1, Math.round((widthU / UNITS_PER_PT) * 2540 / 72));
+    const frameH = Math.max(1, Math.round((heightU / UNITS_PER_PT) * 2540 / 72));
+    hdv.setInt32(24, 0, true);
+    hdv.setInt32(28, 0, true);
+    hdv.setInt32(32, frameW, true);
+    hdv.setInt32(36, frameH, true);
+    // dSignature = " EMF" (0x464D4520), nVersion = 0x00010000
+    hdv.setUint32(40, 0x464d4520, true);
+    hdv.setUint32(44, 0x00010000, true);
+    // szlDevice = (14400, 14400) units = 10 inches @ 1440 DPI; szlMillimeters = (254, 254) mm = 10 inches
+    hdv.setInt32(72, 14400, true);
+    hdv.setInt32(76, 14400, true);
+    hdv.setInt32(80, 254, true);
+    hdv.setInt32(84, 254, true);
+    // szlMicrometers = (254000, 254000) um
+    hdv.setInt32(100, 254000, true);
+    hdv.setInt32(104, 254000, true);
+    pushRecord(headerRec.buf);
+
+    // Thiết lập hệ tọa độ chuẩn (MM_ANISOTROPIC + Window/Viewport Ext/Org)
+    function emitU32Rec(type, val) {
+      const r = makeRec(type, 12);
+      r.dv.setUint32(8, val, true);
+      pushRecord(r.buf);
+    }
+    function emitPointRec(type, x, y) {
+      const r = makeRec(type, 16);
+      r.dv.setInt32(8, Math.round(x), true);
+      r.dv.setInt32(12, Math.round(y), true);
+      pushRecord(r.buf);
+    }
+
+    emitU32Rec(17, 8);                  // EMR_SETMAPMODE (MM_ANISOTROPIC = 8)
+    emitPointRec(9, widthU, heightU);   // EMR_SETWINDOWEXTEX
+    emitPointRec(11, widthU, heightU);  // EMR_SETVIEWPORTEXTEX
+    emitPointRec(10, 0, 0);             // EMR_SETWINDOWORGEX
+    emitPointRec(12, 0, 0);             // EMR_SETVIEWPORTORGEX
+    emitU32Rec(18, 1);                  // EMR_SETBKMODE (TRANSPARENT = 1)
+    emitU32Rec(24, 0x00000000);         // EMR_SETTEXTCOLOR (RGB Black)
+    emitU32Rec(22, 0x00000018);         // EMR_SETTEXTALIGN (TA_LEFT | TA_BASELINE)
+
+    // Quản lý handle GDI (font Times New Roman & pen nét vẽ)
+    let nextHandle = 1;
+    const allocatedHandles = [];
+    const fontHandles = new Map();
+    const penHandles = new Map();
+    let activeFontHandle = 0;
+    let activePenHandle = 0;
+
+    function selectObject(ihObject) {
+      emitU32Rec(37, ihObject); // EMR_SELECTOBJECT
+    }
+
+    function ensureFont(sizeU, italic, bold) {
+      const h = Math.max(80, Math.round(sizeU));
+      const key = h + "_" + (italic ? 1 : 0) + "_" + (bold ? 1 : 0);
+      let handle = fontHandles.get(key);
+      if (!handle) {
+        handle = nextHandle++;
+        fontHandles.set(key, handle);
+        allocatedHandles.push(handle);
+
+        // EMR_EXTCREATEFONTINDIRECTW (Type 82, 332 bytes — LogFontPanose)
+        const rec = makeRec(82, 332);
+        const dv = rec.dv;
+        dv.setUint32(8, handle, true);
+        dv.setInt32(12, -h, true); // lfHeight âm = chiều cao ký tự chính xác theo logical units
+        dv.setInt32(16, 0, true);  // lfWidth = 0 (tự động theo tỷ lệ font)
+        dv.setInt32(20, 0, true);  // lfEscapement
+        dv.setInt32(24, 0, true);  // lfOrientation
+        dv.setInt32(28, bold ? 700 : 400, true); // lfWeight
+        dv.setUint8(32, italic ? 1 : 0);         // lfItalic
+        dv.setUint8(33, 0);                      // lfUnderline
+        dv.setUint8(34, 0);                      // lfStrikeOut
+        dv.setUint8(35, 1);                      // lfCharSet = DEFAULT_CHARSET (Unicode đầy đủ)
+        dv.setUint8(36, 0);                      // lfOutPrecision
+        dv.setUint8(37, 0);                      // lfClipPrecision
+        dv.setUint8(38, 4);                      // lfQuality = ANTIALIASED_QUALITY
+        dv.setUint8(39, 0x12);                   // lfPitchAndFamily = VARIABLE_PITCH | FF_ROMAN
+        writeUtf16Fixed(dv, 40, "Times New Roman", 32);
+        writeUtf16Fixed(dv, 104, "Times New Roman", 64);
+        writeUtf16Fixed(dv, 232, bold ? (italic ? "Bold Italic" : "Bold") : (italic ? "Italic" : "Regular"), 32);
+        pushRecord(rec.buf);
+      }
+
+      if (activeFontHandle !== handle) {
+        selectObject(handle);
+        activeFontHandle = handle;
+      }
+    }
+
+    function ensurePen(strokeU) {
+      const w = Math.max(8, Math.round(strokeU));
+      let handle = penHandles.get(w);
+      if (!handle) {
+        handle = nextHandle++;
+        penHandles.set(w, handle);
+        allocatedHandles.push(handle);
+
+        // EMR_CREATEPEN (Type 38, 28 bytes)
+        const rec = makeRec(38, 28);
+        const dv = rec.dv;
+        dv.setUint32(8, handle, true);
+        dv.setUint32(12, 0, true);          // PS_SOLID
+        dv.setInt32(16, w, true);           // Width.x
+        dv.setInt32(20, 0, true);           // Width.y
+        dv.setUint32(24, 0x00000000, true); // RGB Black
+        pushRecord(rec.buf);
+      }
+
+      if (activePenHandle !== handle) {
+        selectObject(handle);
+        activePenHandle = handle;
+      }
+    }
+
+    const emfDriver = {
+      drawText(str, dxArr, x, y, sizeU, italic, bold, runW) {
+        if (!str || str.length === 0) return;
+        ensureFont(sizeU, italic, bold);
+
+        const nChars = str.length;
+        const strBytes = nChars * 2;
+        const alignedStrBytes = Math.ceil(strBytes / 4) * 4;
+        const offString = 76;
+        const offDx = offString + alignedStrBytes;
+        const recSize = offDx + nChars * 4;
+
+        // EMR_EXTTEXTOUTW (Type 84)
+        const rec = makeRec(84, recSize);
+        const dv = rec.dv;
+        const rx = Math.round(x);
+        const ry = Math.round(y);
+        // rclBounds
+        dv.setInt32(8, Math.max(0, rx), true);
+        dv.setInt32(12, Math.max(0, ry - Math.round(sizeU * 0.9)), true);
+        dv.setInt32(16, Math.min(widthU, rx + Math.round(runW)), true);
+        dv.setInt32(20, Math.min(heightU, ry + Math.round(sizeU * 0.35)), true);
+        dv.setUint32(24, 1, true);               // iGraphicsMode = GM_COMPATIBLE (chuẩn GDI / MathType)
+        dv.setFloat32(28, 2540 / 1440, true);    // exScale (0.01mm / logical unit ở 1440 DPI)
+        dv.setFloat32(32, 2540 / 1440, true);    // eyScale
+        // EmrText header
+        dv.setInt32(36, rx, true);       // Reference.x
+        dv.setInt32(40, ry, true);       // Reference.y (TA_BASELINE)
+        dv.setUint32(44, nChars, true);  // Chars
+        dv.setUint32(48, offString, true);
+        dv.setUint32(52, 0, true);       // Options = ETO_NONE
+        dv.setInt32(56, 0, true);        // Rectangle.left..bottom = 0
+        dv.setInt32(60, 0, true);
+        dv.setInt32(64, 0, true);
+        dv.setInt32(68, 0, true);
+        dv.setUint32(72, offDx, true);   // offDx
+
+        for (let i = 0; i < nChars; i++) {
+          dv.setUint16(offString + i * 2, str.charCodeAt(i), true);
+        }
+        for (let i = 0; i < nChars; i++) {
+          dv.setUint32(offDx + i * 4, Math.max(1, Math.round(dxArr[i] || sizeU * 0.5)), true);
+        }
+        pushRecord(rec.buf);
+      },
+
+      drawLine(x1, y1, x2, y2, strokeU) {
+        ensurePen(strokeU);
+        emitPointRec(27, x1, y1); // EMR_MOVETOEX
+        emitPointRec(54, x2, y2); // EMR_LINETO
+      },
+
+      drawPolyline(points, strokeU) {
+        if (!points || points.length < 2) return;
+        ensurePen(strokeU);
+        emitPointRec(27, points[0][0], points[0][1]); // EMR_MOVETOEX
+        for (let i = 1; i < points.length; i++) {
+          emitPointRec(54, points[i][0], points[i][1]); // EMR_LINETO
+        }
+      }
+    };
+
+    // 3. Vẽ toàn bộ cây công thức toán học ra các bản ghi vector EMF
+    rootBox.draw(emfDriver, padX, baselineY);
+
+    // 4. Trả lại stock objects & xóa toàn bộ GDI handle đã cấp phát (EMR_DELETEOBJECT)
+    if (activeFontHandle) selectObject(0x8000000d); // SYSTEM_FONT
+    if (activePenHandle) selectObject(0x80000007);  // BLACK_PEN
+    for (let i = 0; i < allocatedHandles.length; i++) {
+      emitU32Rec(40, allocatedHandles[i]); // EMR_DELETEOBJECT
+    }
+
+    // 5. Bản ghi cuối: EMR_EOF (Type 14, 20 bytes)
+    const eofRec = makeRec(14, 20);
+    eofRec.dv.setUint32(8, 0, true);   // nPalEntries
+    eofRec.dv.setUint32(12, 16, true); // offPalEntries
+    eofRec.dv.setUint32(16, 20, true); // nSizeLast
+    pushRecord(eofRec.buf);
+
+    // 6. Cập nhật lại tổng kích thước, tổng số bản ghi & tổng số handle vào EMR_HEADER
+    hdv.setUint32(48, totalBytes, true);   // nBytes
+    hdv.setUint32(52, recordCount, true);  // nRecords
+    hdv.setUint16(56, nextHandle, true);   // nHandles = maxHandle + 1
+
+    const emfBytes = new Uint8Array(totalBytes);
+    let cursor = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      emfBytes.set(chunks[i], cursor);
+      cursor += chunks[i].length;
+    }
+
+    return {
+      emfBytes,
+      emfBase64: uint8ArrayToBase64(emfBytes),
+      widthPt,
+      heightPt,
+      depthPt
+    };
   }
 
+  window.renderAstToEmf = renderAstToEmf;
+
   /**
-   * Bước 3 của quy trình MathType:
-   * Tạo gói Flat OPC OOXML (<pkg:package>) chuẩn độc lập cho từng đối tượng MathType (Equation.DSMT4)
-   * gồm đầy đủ các thành phần bắt buộc để Word chấp nhận insertOoxml():
-   * - /_rels/.rels (quan hệ gốc trỏ tới word/document.xml)
-   * - /word/_rels/document.xml.rels (khai báo rId_img -> media/image1.png và rId_ole -> embeddings/oleObject1.bin)
-   * - /word/document.xml (khai báo đủ xmlns:w, xmlns:r, xmlns:v, xmlns:o cùng thẻ <w:object>, <v:shape>, <o:OLEObject>)
-   * - /word/media/image1.png (pkg:contentType="image/png")
-   * - /word/embeddings/oleObject1.bin (pkg:contentType="application/vnd.openxmlformats-officedocument.oleObject")
+   * Tạo gói Flat OPC OOXML (<pkg:package>) chuẩn độc lập cho đối tượng MathType 7.0 (Equation.DSMT4):
+   * - Ảnh hiển thị vector sắc nét: /word/media/image1.emf (pkg:contentType="image/x-emf")
+   * - Căn chỉnh thẳng hàng dòng chữ (Inline Baseline Alignment):
+   *   posHalfPt = -Math.round(depthPt * 2), chèn <w:rPr><w:position w:val="${posHalfPt}"/></w:rPr> ngay trước <w:object>
+   * - Đủ các quan hệ /_rels/.rels và /word/_rels/document.xml.rels (rId_img -> media/image1.emf, rId_ole -> embeddings/oleObject1.bin)
+   * - Nhúng tệp OLE2 CFBF MathType 7.0: /word/embeddings/oleObject1.bin (ProgID="Equation.DSMT4").
    */
   function createMathTypeOoxml(params) {
-    const imageBase64 = String((params && params.imageBase64) || "");
+    const emfBase64 = String((params && (params.emfBase64 || params.imageBase64)) || "");
     const oleBase64 = String((params && params.oleBase64) || "");
-    if (!imageBase64 || !oleBase64) {
-      throw new Error("Thiếu dữ liệu ảnh PNG hoặc tệp nhị phân OLE để tạo gói OOXML MathType.");
+    if (!emfBase64 || !oleBase64) {
+      throw new Error("Thiếu dữ liệu ảnh vector EMF hoặc tệp nhị phân OLE để tạo gói OOXML MathType.");
     }
 
     const widthNum = Math.max(6, Number((params && params.widthPt) || 24));
     const heightNum = Math.max(8, Number((params && params.heightPt) || 14));
+    const depthNum = Math.max(0, Number((params && (params.depthPt !== undefined ? params.depthPt : params.descentPt)) || 0));
     const widthPt = widthNum.toFixed(2);
     const heightPt = heightNum.toFixed(2);
     const dxaOrig = Math.max(20, Math.round(widthNum * 20));
     const dyaOrig = Math.max(20, Math.round(heightNum * 20));
     const shapeId = (params && params.shapeId) || "_x0000_i1025";
     const objectId = (params && params.objectId) || "_1700000001";
-    const fontSizePt = Number((params && params.fontSizePt) || 12);
-    const szHalfPt = Math.max(12, Math.round(fontSizePt * 2));
-    const displayMode = Boolean(params && params.displayMode);
-    const descentPt = Number((params && params.descentPt) || 0);
-    const posHalfPt = !displayMode && descentPt > 0 ? Math.round(descentPt * 2) : 0;
-    const posXml = posHalfPt > 0 ? '<w:position w:val="' + (-posHalfPt) + '"/>' : "";
+    const posHalfPt = -Math.round(depthNum * 2);
 
     return (
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -5405,7 +5969,7 @@
         '<pkg:part pkg:name="/word/_rels/document.xml.rels" pkg:contentType="application/vnd.openxmlformats-package.relationships+xml">' +
           "<pkg:xmlData>" +
             '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
-              '<Relationship Id="rId_img" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/>' +
+              '<Relationship Id="rId_img" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.emf"/>' +
               '<Relationship Id="rId_ole" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="embeddings/oleObject1.bin"/>' +
             "</Relationships>" +
           "</pkg:xmlData>" +
@@ -5420,14 +5984,10 @@
               "<w:body>" +
                 "<w:p>" +
                   "<w:r>" +
-                    "<w:rPr>" +
-                      '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>' +
-                      '<w:sz w:val="' + szHalfPt + '"/>' +
-                      posXml +
-                    "</w:rPr>" +
+                    '<w:rPr><w:position w:val="' + posHalfPt + '"/></w:rPr>' +
                     '<w:object w:dxaOrig="' + dxaOrig + '" w:dyaOrig="' + dyaOrig + '">' +
                       '<v:shapetype id="_x0000_t75" coordsize="21600,21600" o:spt="75" o:preferrelative="t" path="m@4@5l@4@11@9@11@9@5xe" filled="f" stroked="f"/>' +
-                      '<v:shape id="' + escapeXml(shapeId) + '" type="#_x0000_t75" style="width:' + widthPt + "pt;height:" + heightPt + 'pt;vertical-align:middle" o:ole="">' +
+                      '<v:shape id="' + escapeXml(shapeId) + '" type="#_x0000_t75" style="width:' + widthPt + "pt;height:" + heightPt + 'pt" o:ole="">' +
                         '<v:imagedata r:id="rId_img" o:title=""/>' +
                       "</v:shape>" +
                       '<o:OLEObject Type="Embed" ProgID="Equation.DSMT4" ShapeID="' + escapeXml(shapeId) + '" DrawAspect="Content" ObjectID="' + escapeXml(objectId) + '" r:id="rId_ole"/>' +
@@ -5438,8 +5998,8 @@
             "</w:document>" +
           "</pkg:xmlData>" +
         "</pkg:part>" +
-        '<pkg:part pkg:name="/word/media/image1.png" pkg:contentType="image/png" pkg:compression="store">' +
-          "<pkg:binaryData>" + imageBase64 + "</pkg:binaryData>" +
+        '<pkg:part pkg:name="/word/media/image1.emf" pkg:contentType="image/x-emf" pkg:compression="store">' +
+          "<pkg:binaryData>" + emfBase64 + "</pkg:binaryData>" +
         "</pkg:part>" +
         '<pkg:part pkg:name="/word/embeddings/oleObject1.bin" pkg:contentType="application/vnd.openxmlformats-officedocument.oleObject" pkg:compression="store">' +
           "<pkg:binaryData>" + oleBase64 + "</pkg:binaryData>" +
@@ -5519,11 +6079,12 @@
 
   /**
    * Module độc lập: Chuyển đổi hàng loạt LaTeX ($...$, $$...$$, \(...\), \[...\])
-   * trong vùng chọn hoặc toàn tài liệu sang đối tượng MathType nhúng (Equation.DSMT4)
+   * trong vùng chọn hoặc toàn tài liệu sang đối tượng MathType 7.0 nhúng (Equation.DSMT4)
    * hoàn toàn bằng JavaScript thuần (không cần cài phần mềm MathType trên máy):
-   * 1. Tạo ảnh PNG Base64 sắc nét (scale = 2) qua Temml + SVG foreignObject -> Canvas.
-   * 2. Mã hóa MTEF v5 -> luồng Equation Native (28-byte header, cf=0x0008) -> OLE CFBF Base64.
-   * 3. Đóng gói Flat OPC OOXML chuẩn đầy đủ quan hệ ảnh/OLE (createMathTypeOoxml).
+   * 1. Tạo ảnh vector EMF sắc nét (media/image1.emf, image/x-emf) bằng Uint8Array/DataView.
+   * 2. Tự động căn chỉnh đường cơ sở dòng chữ qua <w:rPr><w:position w:val="${-Math.round(depthPt*2)}"/></w:rPr>.
+   * 3. Mã hóa MTEF v5 (header 5,1,0,7,0) -> Equation Native (>= 4096 bytes FAT) -> OLE2 CFBF
+   *    với CLSID chuẩn Design Science/Wiris (02 CE 02 00...) và \x01CompObj ("MathType 7.0 Equation").
    * 4. Định vị từng công thức bằng searchExactInParagraph (matchWildcards: false) và
    *    bọc item.insertOoxml(..., replace) + context.sync() trong try...catch riêng biệt.
    */
@@ -5618,10 +6179,10 @@
           if (state.cancelRequested) break;
           const { para, paragraphIndex, match, count } = tasks[t];
 
-          // Bước 1 & 2: Phân tích LaTeX -> MTEF v5 -> Equation Native -> OLE CFBF + ảnh PNG Base64 (scale=2)
+          // Bước 1 & 2: Phân tích LaTeX -> MTEF v5 (MathType 7.0) -> Equation Native (>=4096B) -> OLE CFBF + ảnh vector EMF
           let ast = null;
           let oleBase64 = "";
-          let preview = null;
+          let emfPreview = null;
           try {
             if (typeof temml !== "undefined") {
               try {
@@ -5641,7 +6202,7 @@
             const nativeBytes = wrapMtefInEquationNative(mtefBytes);
             const oleCfbBytes = buildOleCfbWithEquationNative(nativeBytes);
             oleBase64 = uint8ArrayToBase64(oleCfbBytes);
-            preview = await renderLatexToPngBase64(match.latex, ast, fontSizePt, match.displayMode);
+            emfPreview = renderAstToEmf(ast, fontSizePt, match.displayMode);
           } catch (buildErr) {
             const errMsg = formatWordApiError(buildErr);
             lastTechError = errMsg;
@@ -5655,7 +6216,7 @@
               raw: match.raw,
               latex: match.latex,
               displayMode: match.displayMode,
-              message: "Lỗi tạo dữ liệu MathType: " + errMsg
+              message: "Lỗi tạo dữ liệu MathType 7.0 / EMF: " + errMsg
             });
             updateProgressUI(
               processedCount,
@@ -5734,11 +6295,11 @@
 
             try {
               const ooxml = createMathTypeOoxml({
-                imageBase64: preview.imageBase64,
+                emfBase64: emfPreview.emfBase64,
                 oleBase64,
-                widthPt: preview.widthPt,
-                heightPt: preview.heightPt,
-                descentPt: preview.descentPt,
+                widthPt: emfPreview.widthPt,
+                heightPt: emfPreview.heightPt,
+                depthPt: emfPreview.depthPt,
                 shapeId,
                 objectId,
                 fontSizePt,
@@ -5830,7 +6391,7 @@
           totalFound,
           convertedCount,
           errorCount,
-          "Hoàn tất tạo " + convertedCount + "/" + totalFound + " đối tượng MathType (" + fontSizePt + "pt)"
+          "Hoàn tất tạo " + convertedCount + "/" + totalFound + " đối tượng MathType 7.0 (" + fontSizePt + "pt · EMF)"
         );
         showStatus(
           prefix +
@@ -5838,7 +6399,7 @@
             convertedCount +
             "/" +
             totalFound +
-            " công thức sang MathType (Equation.DSMT4 · " +
+            " công thức sang MathType 7.0 (Equation.DSMT4 · EMF · " +
             fontSizePt +
             "pt)." +
             (errorCount > 0 ? " Có " + errorCount + " lỗi: " + lastTechError : ""),
