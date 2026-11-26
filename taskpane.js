@@ -152,7 +152,16 @@
     isBusy: false,
     cancelRequested: false,
     lastMathML: "",
-    lastScanItems: []
+    lastScanItems: [],
+    // Trạng thái cho tab Sửa trực tiếp (MathLive)
+    autoCaptureWord: true,
+    visualSourceKind: null, // "mathtype" | "omml" | "latex" | null
+    visualDisplayMode: false,
+    mathLiveReady: false,
+    mathLiveFallbackMode: false,
+    selectionDebounceTimer: null,
+    suppressSelectionCaptureUntil: 0,
+    isSyncingVisual: false
   };
 
   const dom = {};
@@ -169,6 +178,8 @@
     updateHostIndicator();
     updateScopeHint();
     updateLivePreview();
+    initVisualEditorWithFallback();
+    registerWordSelectionListener();
   }
 
   const PROJECT_HOME_URL = "https://tex-math.github.io/latex-word-converter/";
@@ -178,6 +189,7 @@
     dom.tabBtns = Array.from(document.querySelectorAll(".tab-btn"));
     dom.tabPanels = {
       convert: document.getElementById("panel-convert"),
+      visual: document.getElementById("panel-visual"),
       about: document.getElementById("panel-about")
     };
     dom.subTabBtns = Array.from(document.querySelectorAll(".sub-tab-btn"));
@@ -227,6 +239,22 @@
     dom.btnInsertWord = document.getElementById("btnInsertWord");
     dom.btnReadFromWord = document.getElementById("btnReadFromWord");
     dom.btnWrapInsertLatex = document.getElementById("btnWrapInsertLatex");
+
+    // Tab 2: Sửa trực tiếp (Trực quan — MathLive)
+    dom.visualSourceBadge = document.getElementById("visualSourceBadge");
+    dom.visualSourceText = document.getElementById("visualSourceText");
+    dom.btnVisualReadNow = document.getElementById("btnVisualReadNow");
+    dom.optAutoCaptureWord = document.getElementById("optAutoCaptureWord");
+    dom.btnVisualClear = document.getElementById("btnVisualClear");
+    dom.visualQuickToolbar = document.getElementById("visualQuickToolbar");
+    dom.visualFallbackNotice = document.getElementById("visualFallbackNotice");
+    dom.visualMathEditor = document.getElementById("visual-math-editor");
+    dom.visualFallbackPreview = document.getElementById("visualFallbackPreview");
+    dom.btnToggleVisualLatex = document.getElementById("btnToggleVisualLatex");
+    dom.visualLatexWrap = document.getElementById("visualLatexWrap");
+    dom.visualLatexInput = document.getElementById("visualLatexInput");
+    dom.btnVisualUpdateMathType = document.getElementById("btnVisualUpdateMathType");
+    dom.btnVisualUpdateWordEq = document.getElementById("btnVisualUpdateWordEq");
 
     // Mục con: Mẫu & Lịch sử
     dom.templateList = document.getElementById("templateList");
@@ -324,10 +352,99 @@
       renderHistory();
       showStatus("Đã xóa toàn bộ lịch sử công thức.", "success");
     });
+
+    // Sự kiện cho Tab Sửa trực tiếp (MathLive + đồng bộ 2 chiều)
+    if (dom.optAutoCaptureWord) {
+      state.autoCaptureWord = Boolean(dom.optAutoCaptureWord.checked);
+      dom.optAutoCaptureWord.addEventListener("change", () => {
+        state.autoCaptureWord = Boolean(dom.optAutoCaptureWord.checked);
+        showStatus(
+          state.autoCaptureWord
+            ? "Đã bật tự động bắt công thức khi chọn trong Word."
+            : "Đã tạm tắt tự động bắt công thức khi chọn trong Word.",
+          "info"
+        );
+      });
+    }
+
+    if (dom.btnVisualReadNow) {
+      dom.btnVisualReadNow.addEventListener("click", () => {
+        captureFormulaFromWordSelection({ silent: false });
+      });
+    }
+
+    if (dom.btnVisualClear) {
+      dom.btnVisualClear.addEventListener("click", () => {
+        setVisualEditorLatex("", { updateField: true, updateTextarea: true });
+        if (dom.visualMathEditor && state.mathLiveReady && typeof dom.visualMathEditor.focus === "function") {
+          dom.visualMathEditor.focus();
+        } else if (dom.visualLatexInput) {
+          dom.visualLatexInput.focus();
+        }
+      });
+    }
+
+    if (dom.visualQuickToolbar) {
+      dom.visualQuickToolbar.addEventListener("click", (event) => {
+        const btn = event.target.closest(".visual-tpl-btn");
+        if (!btn) return;
+        insertVisualTemplate(btn.dataset.ml || "", btn.dataset.fallback || "");
+      });
+    }
+
+    if (dom.btnToggleVisualLatex && dom.visualLatexWrap) {
+      dom.btnToggleVisualLatex.addEventListener("click", () => {
+        const willHide = !dom.visualLatexWrap.classList.contains("hidden");
+        dom.visualLatexWrap.classList.toggle("hidden", willHide);
+        dom.btnToggleVisualLatex.textContent = willHide ? "Hiện mã LaTeX" : "Ẩn mã LaTeX";
+      });
+    }
+
+    if (dom.visualMathEditor) {
+      dom.visualMathEditor.addEventListener("input", () => {
+        if (state.isSyncingVisual) return;
+        state.isSyncingVisual = true;
+        try {
+          const val = getVisualMathFieldValue();
+          if (dom.visualLatexInput && dom.visualLatexInput.value !== val) {
+            dom.visualLatexInput.value = val;
+          }
+          renderVisualFallbackPreview(val);
+        } finally {
+          state.isSyncingVisual = false;
+        }
+      });
+
+      dom.visualMathEditor.addEventListener("keydown", handleVisualEditorKeydown);
+    }
+
+    if (dom.visualLatexInput) {
+      dom.visualLatexInput.addEventListener("input", () => {
+        if (state.isSyncingVisual) return;
+        state.isSyncingVisual = true;
+        try {
+          const val = dom.visualLatexInput.value || "";
+          setVisualMathFieldValue(val);
+          renderVisualFallbackPreview(val);
+        } finally {
+          state.isSyncingVisual = false;
+        }
+      });
+
+      dom.visualLatexInput.addEventListener("keydown", handleVisualEditorKeydown);
+    }
+
+    if (dom.btnVisualUpdateMathType) {
+      dom.btnVisualUpdateMathType.addEventListener("click", () => updateWordSelectionAsMathType());
+    }
+
+    if (dom.btnVisualUpdateWordEq) {
+      dom.btnVisualUpdateWordEq.addEventListener("click", () => updateWordSelectionAsWordEquation());
+    }
   }
 
   /**
-   * Chuyển đổi mượt mà giữa 2 Tab chính ("Chuyển đổi" và "Giới thiệu")
+   * Chuyển đổi mượt mà giữa 3 Tab chính ("Chuyển đổi", "Sửa trực tiếp", "Giới thiệu")
    * bằng cách ẩn/hiện DOM tại chỗ, không tải lại trang hay làm mất dữ liệu đang nhập.
    */
   function switchTab(tabId) {
@@ -336,7 +453,7 @@
       switchSubTab(tabId);
       tabId = "convert";
     }
-    const targetMain = tabId === "about" ? "about" : "convert";
+    const targetMain = dom.tabPanels[tabId] ? tabId : "convert";
     dom.tabBtns.forEach((btn) => {
       const isActive = btn.dataset.tab === targetMain;
       btn.classList.toggle("active", isActive);
@@ -412,7 +529,10 @@
       dom.btnBatchReverse,
       dom.btnLatexToMathType,
       dom.optMathTypeFontSize,
-      dom.btnConvertMathType
+      dom.btnConvertMathType,
+      dom.btnVisualReadNow,
+      dom.btnVisualUpdateMathType,
+      dom.btnVisualUpdateWordEq
     ].forEach((btn) => {
       if (btn) btn.disabled = busy;
     });
@@ -6750,7 +6870,561 @@
   window.convertLatexToMathType = convertLatexToMathType;
 
   /* ------------------------------------------------------------------------
-   * 10. KHỞI CHẠY OFFICE.ONREADY
+   * 10. MODULE SỬA CÔNG THỨC TRỰC TIẾP (TRỰC QUAN — MATHLIVE + OFFICE.JS)
+   *     - Lắng nghe Office.EventType.DocumentSelectionChanged có debounce 300ms
+   *     - Tự động nhận diện MathType (Equation.DSMT4), Word Equation (<m:oMath>)
+   *       hoặc chuỗi LaTeX ($...$) tại vùng đang chọn trong Word
+   *     - Đồng bộ 2 chiều giữa <math-field id="visual-math-editor"> và mã LaTeX
+   *     - Cập nhật ngược vào Word thành MathType 7.0 (EMF) hoặc Word Equation
+   *     - Tự động dự phòng sau 3 giây bằng ô sửa LaTeX + Temml cục bộ nếu CDN bị chặn
+   * ------------------------------------------------------------------------ */
+  function getVisualMathFieldValue() {
+    if (!dom.visualMathEditor) return "";
+    if (typeof dom.visualMathEditor.getValue === "function") {
+      try {
+        return String(dom.visualMathEditor.getValue("latex") || "");
+      } catch (_err) {
+        // Fallback sang thuộc tính .value
+      }
+    }
+    if (typeof dom.visualMathEditor.value === "string") {
+      return dom.visualMathEditor.value;
+    }
+    return (dom.visualMathEditor.textContent || "").trim();
+  }
+
+  function setVisualMathFieldValue(latex) {
+    if (!dom.visualMathEditor) return;
+    const clean = String(latex || "");
+    if (typeof dom.visualMathEditor.setValue === "function") {
+      try {
+        dom.visualMathEditor.setValue(clean, { suppressChangeNotifications: true });
+        return;
+      } catch (_err) {
+        // Fallback sang thuộc tính .value
+      }
+    }
+    try {
+      dom.visualMathEditor.value = clean;
+    } catch (_err2) {
+      dom.visualMathEditor.textContent = clean;
+    }
+  }
+
+  function getVisualEditorLatex() {
+    if (state.mathLiveReady && !state.mathLiveFallbackMode && dom.visualMathEditor) {
+      const fromField = getVisualMathFieldValue().trim();
+      if (fromField) return fromField;
+    }
+    return dom.visualLatexInput ? (dom.visualLatexInput.value || "").trim() : "";
+  }
+
+  function setVisualEditorLatex(latex, opts) {
+    const clean = String(latex || "").trim();
+    const updateField = !opts || opts.updateField !== false;
+    const updateTextarea = !opts || opts.updateTextarea !== false;
+
+    state.isSyncingVisual = true;
+    try {
+      if (updateField) setVisualMathFieldValue(clean);
+      if (updateTextarea && dom.visualLatexInput) {
+        dom.visualLatexInput.value = clean;
+      }
+      renderVisualFallbackPreview(clean);
+    } finally {
+      state.isSyncingVisual = false;
+    }
+  }
+
+  function updateVisualSourceBadge(kind) {
+    if (!dom.visualSourceBadge || !dom.visualSourceText) return;
+    dom.visualSourceBadge.classList.remove("source-mathtype", "source-omml", "source-latex");
+
+    if (kind === "mathtype") {
+      dom.visualSourceBadge.classList.add("source-mathtype");
+      dom.visualSourceText.textContent = "Đang sửa: Công thức MathType";
+    } else if (kind === "omml") {
+      dom.visualSourceBadge.classList.add("source-omml");
+      dom.visualSourceText.textContent = "Đang sửa: Word Equation";
+    } else if (kind === "latex") {
+      dom.visualSourceBadge.classList.add("source-latex");
+      dom.visualSourceText.textContent = "Đang sửa: Chuỗi LaTeX ($...$)";
+    } else {
+      dom.visualSourceText.textContent = "Hãy kích chọn một công thức trong Word để sửa";
+    }
+  }
+
+  function renderVisualFallbackPreview(latex) {
+    if (!dom.visualFallbackPreview) return;
+    if (!state.mathLiveFallbackMode) return;
+
+    const clean = String(latex || "").trim();
+    if (!clean) {
+      dom.visualFallbackPreview.innerHTML =
+        '<span class="preview-placeholder">Nhập mã LaTeX bên dưới để xem trước bằng Temml cục bộ...</span>';
+      return;
+    }
+
+    if (typeof window.temml !== "undefined" && typeof window.temml.renderToString === "function") {
+      try {
+        dom.visualFallbackPreview.innerHTML = window.temml.renderToString(clean, {
+          displayMode: Boolean(state.visualDisplayMode),
+          throwOnError: true,
+          strict: false
+        });
+      } catch (err) {
+        dom.visualFallbackPreview.innerHTML =
+          '<div class="preview-error">Lỗi cú pháp LaTeX: ' +
+          escapeXml(err && err.message ? err.message : String(err)) +
+          "</div>";
+      }
+    } else {
+      dom.visualFallbackPreview.innerHTML =
+        '<span class="preview-placeholder">' + escapeXml(clean) + "</span>";
+    }
+  }
+
+  function activateMathLiveReady() {
+    state.mathLiveReady = true;
+    state.mathLiveFallbackMode = false;
+    if (dom.visualFallbackNotice) dom.visualFallbackNotice.classList.add("hidden");
+    if (dom.visualFallbackPreview) dom.visualFallbackPreview.classList.add("hidden");
+    if (dom.visualMathEditor) {
+      dom.visualMathEditor.classList.remove("hidden");
+      const currentVal = dom.visualLatexInput
+        ? dom.visualLatexInput.value
+        : getVisualMathFieldValue();
+      setVisualMathFieldValue(currentVal);
+    }
+  }
+
+  function activateMathLiveFallback() {
+    if (state.mathLiveReady) return;
+    state.mathLiveFallbackMode = true;
+    if (dom.visualMathEditor) dom.visualMathEditor.classList.add("hidden");
+    if (dom.visualFallbackNotice) dom.visualFallbackNotice.classList.remove("hidden");
+    if (dom.visualFallbackPreview) dom.visualFallbackPreview.classList.remove("hidden");
+    if (dom.visualLatexWrap) dom.visualLatexWrap.classList.remove("hidden");
+    if (dom.btnToggleVisualLatex) dom.btnToggleVisualLatex.textContent = "Ẩn mã LaTeX";
+    renderVisualFallbackPreview(dom.visualLatexInput ? dom.visualLatexInput.value : "");
+  }
+
+  /**
+   * Kiểm tra sẵn sàng của thư viện MathLive (customElements.get("math-field")).
+   * Nếu sau 3 giây CDN bị chặn hoặc chưa tải xong, tự động chuyển sang chế độ dự phòng
+   * dùng ô sửa LaTeX + xem trước cục bộ bằng Temml để không làm đứng ứng dụng.
+   */
+  function initVisualEditorWithFallback() {
+    const initialLatex = dom.visualLatexInput ? dom.visualLatexInput.value : "";
+    setVisualEditorLatex(initialLatex, { updateField: true, updateTextarea: true });
+
+    if (typeof window.customElements !== "undefined" && window.customElements.get("math-field")) {
+      activateMathLiveReady();
+      return;
+    }
+
+    const startTime = Date.now();
+    const TIMEOUT_MS = 3000;
+    const pollId = window.setInterval(() => {
+      if (typeof window.customElements !== "undefined" && window.customElements.get("math-field")) {
+        window.clearInterval(pollId);
+        activateMathLiveReady();
+        return;
+      }
+      if (Date.now() - startTime >= TIMEOUT_MS) {
+        window.clearInterval(pollId);
+        activateMathLiveFallback();
+      }
+    }, 200);
+
+    // Nếu mạng chậm tải xong MathLive sau mốc 3 giây, tự động nâng cấp lại mượt mà
+    if (typeof window.customElements !== "undefined" && typeof window.customElements.whenDefined === "function") {
+      window.customElements.whenDefined("math-field").then(() => {
+        window.clearInterval(pollId);
+        activateMathLiveReady();
+      });
+    }
+  }
+
+  function insertVisualTemplate(mathLiveSnippet, fallbackSnippet) {
+    if (
+      state.mathLiveReady &&
+      !state.mathLiveFallbackMode &&
+      dom.visualMathEditor &&
+      typeof dom.visualMathEditor.executeCommand === "function"
+    ) {
+      try {
+        dom.visualMathEditor.focus();
+        dom.visualMathEditor.executeCommand(["insert", mathLiveSnippet || fallbackSnippet, { focus: true }]);
+        const updated = getVisualMathFieldValue();
+        if (dom.visualLatexInput) dom.visualLatexInput.value = updated;
+        return;
+      } catch (_err) {
+        // Fallback sang chèn vào ô LaTeX
+      }
+    }
+
+    if (dom.visualLatexInput) {
+      const input = dom.visualLatexInput;
+      const snippet = fallbackSnippet || mathLiveSnippet || "";
+      const start = input.selectionStart ?? input.value.length;
+      const end = input.selectionEnd ?? input.value.length;
+      input.value = input.value.slice(0, start) + snippet + input.value.slice(end);
+      const cursorPos = start + snippet.length;
+      input.setSelectionRange(cursorPos, cursorPos);
+      input.focus();
+      setVisualMathFieldValue(input.value);
+      renderVisualFallbackPreview(input.value);
+    }
+  }
+
+  function handleVisualEditorKeydown(event) {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      if (state.visualSourceKind === "mathtype") {
+        updateWordSelectionAsMathType();
+      } else {
+        updateWordSelectionAsWordEquation();
+      }
+    }
+  }
+
+  /**
+   * Phân tích OOXML vùng đang chọn trong Word để nhận diện 1 trong 3 loại công thức:
+   * 1. Đối tượng MathType OLE (<w:object> có <o:OLEObject ProgID="Equation.DSMT4"> hoặc tương đương)
+   * 2. Word Equation (<m:oMath> / <m:oMathPara>)
+   * 3. Chuỗi LaTeX ($...$, $$...$$, \(...\), \[...\])
+   */
+  function extractSingleFormulaFromSelectionOoxml(ooxmlString, plainText) {
+    if (ooxmlString && typeof DOMParser !== "undefined") {
+      try {
+        const parser = new DOMParser();
+        const pkgDoc = parser.parseFromString(ooxmlString, "application/xml");
+        if (pkgDoc.getElementsByTagName("parsererror").length === 0) {
+          // 1. Ưu tiên kiểm tra đối tượng MathType OLE (<w:object> + <o:OLEObject>)
+          const parts = Array.from(pkgDoc.getElementsByTagName("*")).filter(
+            (el) => el.localName === "part"
+          );
+          const relMap = new Map();
+          const binMap = new Map();
+          let documentPartEl = null;
+
+          parts.forEach((part) => {
+            const pName = (part.getAttribute("pkg:name") || part.getAttribute("name") || "").trim();
+            const normName = normalizePackagePath(pName);
+
+            if (normName.endsWith("/word/document.xml") || normName === "/word/document.xml") {
+              documentPartEl = part;
+            }
+            if (normName.endsWith("/word/_rels/document.xml.rels")) {
+              const relNodes = Array.from(part.getElementsByTagName("*")).filter(
+                (el) => el.localName === "Relationship"
+              );
+              relNodes.forEach((rel) => {
+                const id = rel.getAttribute("Id") || "";
+                const target = rel.getAttribute("Target") || "";
+                if (id && target) {
+                  relMap.set(id, normalizePackagePath(target));
+                }
+              });
+            }
+
+            const binEl = Array.from(part.getElementsByTagName("*")).find(
+              (el) => el.localName === "binaryData"
+            );
+            if (binEl && binEl.textContent) {
+              binMap.set(normName, binEl.textContent.trim());
+            }
+          });
+
+          const searchRoot = documentPartEl || pkgDoc;
+          const objectNodes = Array.from(searchRoot.getElementsByTagName("*")).filter(
+            (el) => el.localName === "object"
+          );
+
+          for (let i = 0; i < objectNodes.length; i++) {
+            const oleEl = Array.from(objectNodes[i].getElementsByTagName("*")).find(
+              (el) => el.localName === "OLEObject"
+            );
+            if (!oleEl) continue;
+            const progId = getAttrByLocalName(oleEl, "ProgID");
+            if (!MATHTYPE_PROGID_RE.test(progId)) continue;
+
+            const rId = getAttrByLocalName(oleEl, "id");
+            let binBase64 = "";
+            if (rId && relMap.has(rId)) {
+              binBase64 = binMap.get(relMap.get(rId)) || "";
+            }
+            if (!binBase64) {
+              for (const [k, v] of binMap.entries()) {
+                if (k.includes("oleobject") && k.endsWith(".bin")) {
+                  binBase64 = v;
+                  break;
+                }
+              }
+            }
+
+            if (binBase64) {
+              const oleBytes = base64ToUint8Array(binBase64);
+              const nativeBytes = extractEquationNativeFromCfb(oleBytes);
+              const decoded = parseMtefToLatex(nativeBytes);
+              if (decoded && decoded.latex) {
+                return {
+                  kind: "mathtype",
+                  latex: decoded.latex,
+                  displayMode: !decoded.isInline
+                };
+              }
+            }
+          }
+
+          // 2. Kiểm tra Word Equation (<m:oMath> / <m:oMathPara>)
+          const ommlExtracted = extractLatexFromOoxml(ooxmlString);
+          if (ommlExtracted && ommlExtracted.latex) {
+            return {
+              kind: "omml",
+              latex: ommlExtracted.latex,
+              displayMode: Boolean(ommlExtracted.isDisplay)
+            };
+          }
+
+          // 3. Trích xuất văn bản thuần từ <w:t> nếu plainText chưa có
+          if (!plainText) {
+            const tNodes = Array.from(searchRoot.getElementsByTagName("*")).filter(
+              (el) => el.localName === "t"
+            );
+            plainText = tNodes.map((n) => n.textContent || "").join("");
+          }
+        }
+      } catch (_parseErr) {
+        // Bỏ qua lỗi XML cục bộ và thử kiểm tra plainText bên dưới
+      }
+    }
+
+    // 3. Kiểm tra chuỗi LaTeX ($...$, $$...$$, \(...\), \[...\]) trong vùng đang chọn
+    const textCandidate = String(plainText || "").trim();
+    if (textCandidate) {
+      const matches = extractLatexMatches(textCandidate, {
+        useInline: true,
+        useDisplay: true,
+        skipCurrency: true
+      });
+      if (matches.length > 0) {
+        return {
+          kind: "latex",
+          latex: matches[0].latex,
+          displayMode: Boolean(matches[0].displayMode),
+          raw: matches[0].raw
+        };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Đọc vùng đang chọn trong Word và nạp tự động vào khung Sửa trực tiếp (MathLive).
+   */
+  async function captureFormulaFromWordSelection(options) {
+    const silent = Boolean(options && options.silent);
+    if (!state.isWordHost || typeof window.Word === "undefined") {
+      if (!silent) {
+        showStatus("Cần mở tiện ích bên trong Microsoft Word để bắt công thức đang chọn.", "warn");
+      }
+      return null;
+    }
+    if (state.isBusy) return null;
+
+    try {
+      let ooxmlValue = "";
+      let selectionText = "";
+      await Word.run(async (context) => {
+        const selection = context.document.getSelection();
+        selection.load("text");
+        const ooxml = selection.getOoxml();
+        await context.sync();
+        ooxmlValue = ooxml.value || "";
+        selectionText = selection.text || "";
+      });
+
+      const detected = extractSingleFormulaFromSelectionOoxml(ooxmlValue, selectionText);
+      if (!detected || !detected.latex) {
+        state.visualSourceKind = null;
+        updateVisualSourceBadge(null);
+        if (!silent) {
+          showStatus("Hãy kích chọn một công thức MathType, Word Equation hoặc chuỗi $...$ trong Word.", "warn");
+        }
+        return null;
+      }
+
+      state.visualSourceKind = detected.kind;
+      state.visualDisplayMode = Boolean(detected.displayMode);
+      setVisualEditorLatex(detected.latex, { updateField: true, updateTextarea: true });
+      updateVisualSourceBadge(detected.kind);
+
+      if (!silent) {
+        const label =
+          detected.kind === "mathtype"
+            ? "Công thức MathType"
+            : detected.kind === "omml"
+              ? "Word Equation"
+              : "Chuỗi LaTeX";
+        showStatus("Đã nạp " + label + " vào khung sửa trực quan.", "success");
+      }
+      return detected;
+    } catch (err) {
+      if (!silent) {
+        showStatus("Không thể đọc công thức đang chọn: " + formatWordApiError(err), "error");
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Hàm xử lý sự kiện Office.EventType.DocumentSelectionChanged có debounce 300ms
+   * để tránh gây giật lag khi giáo viên gõ hoặc di chuyển con trỏ trên văn bản thường.
+   */
+  function onWordSelectionChanged() {
+    if (!state.autoCaptureWord || state.isBusy) return;
+    if (Date.now() < state.suppressSelectionCaptureUntil) return;
+
+    if (state.selectionDebounceTimer) {
+      window.clearTimeout(state.selectionDebounceTimer);
+    }
+    state.selectionDebounceTimer = window.setTimeout(() => {
+      state.selectionDebounceTimer = null;
+      if (!state.autoCaptureWord || state.isBusy) return;
+      if (Date.now() < state.suppressSelectionCaptureUntil) return;
+      captureFormulaFromWordSelection({ silent: true });
+    }, 300);
+  }
+
+  function registerWordSelectionListener() {
+    try {
+      if (
+        typeof window.Office !== "undefined" &&
+        window.Office.context &&
+        window.Office.context.document &&
+        window.Office.EventType &&
+        window.Office.EventType.DocumentSelectionChanged &&
+        typeof window.Office.context.document.addHandlerAsync === "function"
+      ) {
+        window.Office.context.document.addHandlerAsync(
+          window.Office.EventType.DocumentSelectionChanged,
+          onWordSelectionChanged
+        );
+      }
+    } catch (_err) {
+      // An toàn bỏ qua nếu host Office không hỗ trợ sự kiện chọn
+    }
+  }
+
+  /**
+   * Cập nhật công thức vừa sửa trực quan ngược lại vào vùng đang chọn trong Word
+   * dưới dạng đối tượng MathType 7.0 (Equation.DSMT4) kèm ảnh vector EMF căn thẳng hàng dòng.
+   */
+  async function updateWordSelectionAsMathType() {
+    if (!ensureWordAvailable() || state.isBusy) return false;
+
+    const latex = getVisualEditorLatex();
+    if (!latex) {
+      showStatus("Khung sửa trực quan đang trống. Vui lòng nhập hoặc chọn một công thức.", "warn");
+      return false;
+    }
+
+    const fontSizePt = Number((dom.optMathTypeFontSize && dom.optMathTypeFontSize.value) || 12);
+    const displayMode = Boolean(state.visualDisplayMode);
+
+    setBusy(true, false);
+    state.suppressSelectionCaptureUntil = Date.now() + 1200;
+    try {
+      const ast = parseLatexToAst(latex);
+      const mtefBytes = encodeAstToMtefV5(ast, { displayMode, fontSizePt });
+      const nativeBytes = wrapMtefInEquationNative(mtefBytes);
+      const oleCfbBytes = buildOleCfbWithEquationNative(nativeBytes);
+      const oleBase64 = uint8ArrayToBase64(oleCfbBytes);
+      const emfPreview = renderAstToEmf(ast, fontSizePt, displayMode);
+
+      const uniqueNum = Math.floor(Math.random() * 900000) + 100;
+      const ooxml = createMathTypeOoxml({
+        emfBase64: emfPreview.emfBase64,
+        oleBase64,
+        widthPt: emfPreview.widthPt,
+        heightPt: emfPreview.heightPt,
+        depthPt: emfPreview.depthPt,
+        uniqueNum,
+        objectId: "_" + (1750000000 + uniqueNum)
+      });
+
+      await Word.run(async (context) => {
+        const selection = context.document.getSelection();
+        selection.insertOoxml(ooxml, Word.InsertLocation.replace);
+        await context.sync();
+      });
+
+      state.visualSourceKind = "mathtype";
+      updateVisualSourceBadge("mathtype");
+      addToHistory(latex, displayMode);
+      showStatus(
+        "Đã cập nhật công thức thành MathType 7.0 (EMF · " + fontSizePt + "pt) tại vùng đang chọn.",
+        "success"
+      );
+      return true;
+    } catch (err) {
+      showStatus("Lỗi cập nhật MathType (EMF): " + formatWordApiError(err), "error");
+      return false;
+    } finally {
+      state.suppressSelectionCaptureUntil = Date.now() + 900;
+      setBusy(false, false);
+    }
+  }
+
+  /**
+   * Cập nhật công thức vừa sửa trực quan ngược lại vào vùng đang chọn trong Word
+   * dưới dạng Word Equation (OMML).
+   */
+  async function updateWordSelectionAsWordEquation() {
+    if (!ensureWordAvailable() || state.isBusy) return false;
+
+    const latex = getVisualEditorLatex();
+    if (!latex) {
+      showStatus("Khung sửa trực quan đang trống. Vui lòng nhập hoặc chọn một công thức.", "warn");
+      return false;
+    }
+
+    const displayMode = Boolean(state.visualDisplayMode);
+
+    setBusy(true, false);
+    state.suppressSelectionCaptureUntil = Date.now() + 1200;
+    try {
+      const ooxml = latexToWordOoxml(latex, displayMode);
+      await Word.run(async (context) => {
+        const selection = context.document.getSelection();
+        selection.insertOoxml(ooxml, Word.InsertLocation.replace);
+        await context.sync();
+      });
+
+      state.visualSourceKind = "omml";
+      updateVisualSourceBadge("omml");
+      addToHistory(latex, displayMode);
+      showStatus("Đã cập nhật công thức thành Word Equation (OMML) tại vùng đang chọn.", "success");
+      return true;
+    } catch (err) {
+      showStatus("Lỗi cập nhật Word Equation: " + formatWordApiError(err), "error");
+      return false;
+    } finally {
+      state.suppressSelectionCaptureUntil = Date.now() + 900;
+      setBusy(false, false);
+    }
+  }
+
+  window.onWordSelectionChanged = onWordSelectionChanged;
+  window.extractSingleFormulaFromSelectionOoxml = extractSingleFormulaFromSelectionOoxml;
+  window.updateWordSelectionAsMathType = updateWordSelectionAsMathType;
+  window.updateWordSelectionAsWordEquation = updateWordSelectionAsWordEquation;
+
+  /* ------------------------------------------------------------------------
+   * 11. KHỞI CHẠY OFFICE.ONREADY
    * ------------------------------------------------------------------------ */
   if (typeof window.Office !== "undefined" && typeof window.Office.onReady === "function") {
     window.Office.onReady((info) => {

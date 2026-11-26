@@ -8,6 +8,8 @@
 
   <!-- Office.js chính thức từ Microsoft CDN -->
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <!-- Trình soạn thảo công thức toán học trực quan MathLive (có dự phòng tự động sau 3 giây) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/mathlive"></script>
 
   <style>
     :root {
@@ -97,10 +99,10 @@
       flex-shrink: 0;
     }
 
-    /* Điều hướng 2 tab chính gọn gàng ở đầu Task Pane */
+    /* Điều hướng 3 tab chính gọn gàng ở đầu Task Pane */
     .tab-bar {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(3, 1fr);
       gap: 4px;
       background: var(--bg-subtle);
       padding: 3px;
@@ -837,6 +839,124 @@
       line-height: 1.35;
     }
 
+    /* Khu vực Sửa công thức trực tiếp (Trực quan — MathLive) */
+    .visual-source-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 7px 9px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--bg-subtle);
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+
+    .visual-source-banner.source-mathtype {
+      background: #fff7ed;
+      border-color: #fdba74;
+      color: #c2410c;
+    }
+
+    .visual-source-banner.source-omml {
+      background: var(--accent-soft);
+      border-color: #93c5fd;
+      color: var(--accent);
+    }
+
+    .visual-source-banner.source-latex {
+      background: var(--success-bg);
+      border-color: var(--success-border);
+      color: var(--success-text);
+    }
+
+    .visual-quick-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 5px;
+    }
+
+    .visual-tpl-btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--bg-canvas);
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 6px 4px;
+      border-radius: 5px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+    }
+
+    .visual-tpl-btn:hover {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .visual-tpl-icon {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    math-field#visual-math-editor {
+      display: block;
+      width: 100%;
+      min-height: 76px;
+      padding: 10px 10px;
+      border: 1.5px solid var(--border-strong);
+      border-radius: var(--radius);
+      background: #ffffff;
+      color: var(--text-primary);
+      font-size: 18px;
+      line-height: 1.5;
+      outline: none;
+      box-sizing: border-box;
+      --caret-color: #185abd;
+      --selection-background-color: #dbeafe;
+    }
+
+    math-field#visual-math-editor:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(24, 90, 189, 0.15);
+    }
+
+    .visual-fallback-alert {
+      background: var(--warn-bg);
+      border: 1px solid var(--warn-border);
+      color: var(--warn-text);
+      border-radius: var(--radius);
+      padding: 8px 9px;
+      font-size: 11.5px;
+      line-height: 1.45;
+    }
+
+    .visual-fallback-alert code {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      background: rgba(146, 84, 0, 0.1);
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+
+    .visual-latex-box {
+      min-height: 58px;
+      font-size: 11.5px;
+    }
+
     .hidden {
       display: none !important;
     }
@@ -851,6 +971,7 @@
       </div>
       <nav class="tab-bar" role="tablist" aria-label="Điều hướng chính">
         <button type="button" class="tab-btn active" role="tab" aria-selected="true" data-tab="convert">Chuyển đổi</button>
+        <button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="visual">Sửa trực tiếp</button>
         <button type="button" class="tab-btn" role="tab" aria-selected="false" data-tab="about">Giới thiệu</button>
       </nav>
     </header>
@@ -1065,7 +1186,92 @@
         </div>
       </section>
 
-      <!-- TAB 2: GIỚI THIỆU TÁC GIẢ & HƯỚNG DẪN NHANH -->
+      <!-- TAB 2: SỬA CÔNG THỨC TRỰC TIẾP (TRỰC QUAN — MATHLIVE) -->
+      <section id="panel-visual" class="tab-panel" role="tabpanel">
+        <div class="section-card">
+          <div id="visualSourceBadge" class="visual-source-banner" aria-live="polite">
+            <span id="visualSourceText">Hãy kích chọn một công thức trong Word để sửa</span>
+            <button type="button" id="btnVisualReadNow" class="mini-btn" title="Đọc công thức đang chọn trong Word">
+              Đọc ngay
+            </button>
+          </div>
+
+          <label class="check-item" for="optAutoCaptureWord">
+            <input type="checkbox" id="optAutoCaptureWord" checked />
+            <span>Tự động bắt công thức khi chọn trong Word</span>
+          </label>
+        </div>
+
+        <div class="section-card">
+          <div class="section-row">
+            <span class="field-label">Chèn nhanh mẫu trực quan</span>
+            <button type="button" id="btnVisualClear" class="text-link-btn">Xóa trắng</button>
+          </div>
+          <div class="visual-quick-grid" id="visualQuickToolbar">
+            <button type="button" class="visual-tpl-btn" data-ml="\frac{#@}{#?}" data-fallback="\frac{a}{b}" title="Chèn phân số">
+              <span class="visual-tpl-icon">a/b</span><span>Phân số</span>
+            </button>
+            <button type="button" class="visual-tpl-btn" data-ml="\sqrt{#@}" data-fallback="\sqrt{x}" title="Chèn căn thức">
+              <span class="visual-tpl-icon">√</span><span>Căn thức</span>
+            </button>
+            <button type="button" class="visual-tpl-btn" data-ml="#@^{#?}" data-fallback="x^{2}" title="Chèn lũy thừa">
+              <span class="visual-tpl-icon">xⁿ</span><span>Lũy thừa</span>
+            </button>
+            <button type="button" class="visual-tpl-btn" data-ml="\int_{#?}^{#?} #? \, dx" data-fallback="\int_{a}^{b} f(x)\,dx" title="Chèn tích phân có cận">
+              <span class="visual-tpl-icon">∫</span><span>Tích phân</span>
+            </button>
+            <button type="button" class="visual-tpl-btn" data-ml="\begin{cases} #? \\ #? \end{cases}" data-fallback="\begin{cases} x + y = 1 \\ x - y = 0 \end{cases}" title="Chèn hệ phương trình">
+              <span class="visual-tpl-icon">{</span><span>Hệ PT</span>
+            </button>
+            <button type="button" class="visual-tpl-btn" data-ml="\vec{#@}" data-fallback="\vec{a}" title="Chèn vectơ">
+              <span class="visual-tpl-icon">v⃗</span><span>Vectơ</span>
+            </button>
+          </div>
+
+          <!-- Thông báo dự phòng khi CDN MathLive bị chặn hoặc chậm quá 3 giây -->
+          <div id="visualFallbackNotice" class="visual-fallback-alert hidden">
+            <strong>Không tải được MathLive từ CDN.</strong> Tiện ích đã tự động chuyển sang chế độ sửa LaTeX + xem trước cục bộ bằng Temml. Để dùng khung soạn thảo trực quan ngoại tuyến, hãy tải tệp <code>mathlive.min.js</code> vào cùng thư mục kho GitHub Pages và đổi thẻ nạp sang <code>./mathlive.min.js</code>.
+          </div>
+
+          <!-- Khung soạn thảo trực quan MathLive -->
+          <math-field
+            id="visual-math-editor"
+            math-virtual-keyboard-policy="manual"
+            aria-label="Khung sửa công thức toán học trực quan"
+          >f(x) = \frac{x^2 - 3x + 5}{4x - 7}</math-field>
+
+          <!-- Khung xem trước dự phòng bằng Temml cục bộ (chỉ hiện khi MathLive chưa tải được) -->
+          <div id="visualFallbackPreview" class="preview-box hidden" aria-live="polite">
+            <span class="preview-placeholder">Xem trước Temml cục bộ...</span>
+          </div>
+
+          <div class="section-row" style="margin-top: 2px;">
+            <label for="visualLatexInput" class="field-label">Mã LaTeX đồng bộ 2 chiều</label>
+            <button type="button" id="btnToggleVisualLatex" class="text-link-btn">Ẩn mã LaTeX</button>
+          </div>
+          <div id="visualLatexWrap">
+            <textarea
+              id="visualLatexInput"
+              class="latex-textarea visual-latex-box"
+              spellcheck="false"
+              placeholder="Mã LaTeX tự động đồng bộ 2 chiều với khung trực quan..."
+            >f(x) = \frac{x^2 - 3x + 5}{4x - 7}</textarea>
+          </div>
+          <p class="hint-text">
+            Phím tắt: <span class="code-inline">Ctrl + Enter</span> (Windows) hoặc <span class="code-inline">Cmd + Enter</span> (macOS) để cập nhật nhanh vào Word.
+          </p>
+        </div>
+
+        <button type="button" id="btnVisualUpdateMathType" class="btn btn-orange">
+          Cập nhật thành MathType (EMF)
+        </button>
+
+        <button type="button" id="btnVisualUpdateWordEq" class="btn btn-primary">
+          Cập nhật thành Word Equation
+        </button>
+      </section>
+
+      <!-- TAB 3: GIỚI THIỆU TÁC GIẢ & HƯỚNG DẪN NHANH -->
       <section id="panel-about" class="tab-panel" role="tabpanel">
         <article class="author-card" aria-label="Thông tin tác giả và tiện ích">
           <div class="author-banner">
