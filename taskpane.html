@@ -934,6 +934,59 @@
       box-shadow: 0 0 0 2px rgba(24, 90, 189, 0.15);
     }
 
+    /* Tối ưu menu nút ba gạch (≡) của MathLive trên khung Task Pane hẹp */
+    math-field#visual-math-editor {
+      max-width: 100%;
+      --_menu-max-width: 95vw;
+    }
+
+    [role="menu"],
+    .ui-menu-container,
+    .ui-menu,
+    .ML__menu,
+    ul.ui-menu-list,
+    div[popover] {
+      max-width: 95vw !important;
+      box-sizing: border-box !important;
+    }
+
+    .ui-menu-container,
+    .ML__menu {
+      max-height: 78vh !important;
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
+    }
+
+    .ui-menu-container li,
+    .ui-menu-container [role="menuitem"],
+    .ML__menu li,
+    .ML__menu [role="menuitem"] {
+      padding: 4px 10px !important;
+      min-height: 26px !important;
+      font-size: 12.5px !important;
+      line-height: 1.25 !important;
+      max-width: 92vw !important;
+      box-sizing: border-box !important;
+    }
+
+    .ml-menu-sym {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 24px;
+      padding: 1px 4px;
+      font-family: "Cambria Math", "STIX Two Math", "Times New Roman", serif;
+      font-size: 14px;
+      line-height: 1.2;
+      white-space: nowrap;
+      color: inherit;
+    }
+
+    .ml-menu-sym.ml-menu-math math {
+      font-size: 13.5px;
+      line-height: 1.15;
+    }
+
     .visual-fallback-alert {
       background: var(--warn-bg);
       border: 1px solid var(--warn-border);

@@ -6986,14 +6986,38 @@
   }
 
   /**
-   * Tạo các nhóm công thức Toán phổ thông bổ sung vào menu ba gạch (≡) của MathLive.
-   * Giữ nguyên nhãn tiếng Anh ngắn gọn để đồng bộ với menu mặc định của MathLive.
+   * Tạo nhãn HTML chỉ gồm đúng ký hiệu/công thức toán học (không có chữ chú thích, không có aside)
+   * để thu hẹp tối đa chiều rộng submenu cấp 3 trên khung Task Pane hẹp của Word.
+   */
+  function renderCompactMenuSymbol(previewLatex, unicodeFallback) {
+    if (
+      previewLatex &&
+      typeof window.temml !== "undefined" &&
+      typeof window.temml.renderToString === "function"
+    ) {
+      try {
+        const mathml = window.temml.renderToString(previewLatex, {
+          displayMode: false,
+          throwOnError: false,
+          strict: false
+        });
+        return '<span class="ml-menu-sym ml-menu-math">' + mathml + "</span>";
+      } catch (_err) {
+        // Fallback sang ký tự toán học Unicode chuẩn
+      }
+    }
+    return '<span class="ml-menu-sym">' + escapeXml(unicodeFallback) + "</span>";
+  }
+
+  /**
+   * Tạo 8 nhóm lệnh chèn (Menu cấp 2) và các ký hiệu toán học thuần (Menu cấp 3)
+   * cho nút ba gạch (≡) của <math-field>.
    */
   function buildCustomMathLiveSubmenus(mf) {
-    const createInsertItem = (id, label, latexTemplate) => ({
+    const createSymbolItem = (id, latexTemplate, previewLatex, unicodeFallback) => ({
       type: "command",
       id,
-      label,
+      label: renderCompactMenuSymbol(previewLatex, unicodeFallback),
       onMenuSelect: () => {
         if (!mf || typeof mf.executeCommand !== "function") return;
         mf.executeCommand(["insert", latexTemplate, { focus: true }]);
@@ -7005,93 +7029,233 @@
     return [
       {
         type: "submenu",
-        id: "custom-insert-limits",
-        label: "Limits",
+        id: "ml-grp-algebra",
+        label: "Insert Đại số",
         submenu: [
-          createInsertItem("custom-lim-point", "Limit at point", "\\lim_{x \\to #?} #0"),
-          createInsertItem("custom-lim-right", "Right-hand limit", "\\lim_{x \\to #?^+} #0"),
-          createInsertItem("custom-lim-left", "Left-hand limit", "\\lim_{x \\to #?^-} #0"),
-          createInsertItem("custom-lim-pos-inf", "Limit to +∞", "\\lim_{x \\to +\\infty} #0"),
-          createInsertItem("custom-lim-neg-inf", "Limit to -∞", "\\lim_{x \\to -\\infty} #0"),
-          createInsertItem("custom-lim-seq", "Sequence limit", "\\lim_{n \\to +\\infty} #0")
+          createSymbolItem("ml-alg-frac", "\\frac{#@}{#?}", "\\frac{\\square}{\\square}", "□/□"),
+          createSymbolItem("ml-alg-sqrt", "\\sqrt{#@}", "\\sqrt{\\square}", "√□"),
+          createSymbolItem("ml-alg-nroot", "\\sqrt[#?]{#@}", "\\sqrt[n]{\\square}", "ⁿ√□"),
+          createSymbolItem("ml-alg-sup", "#@^{#?}", "x^{n}", "xⁿ"),
+          createSymbolItem("ml-alg-sub", "#@_{#?}", "x_{n}", "xₙ"),
+          createSymbolItem("ml-alg-abs", "\\left|#@\\right|", "\\left|x\\right|", "|x|"),
+          createSymbolItem("ml-alg-log", "\\log_{#?}\\left(#@\\right)", "\\log_{a}(x)", "logₐ(x)"),
+          createSymbolItem("ml-alg-ln", "\\ln\\left(#@\\right)", "\\ln(x)", "ln(x)"),
+          createSymbolItem("ml-alg-pm", "\\pm", null, "±"),
+          createSymbolItem("ml-alg-le", "\\le", null, "≤"),
+          createSymbolItem("ml-alg-ge", "\\ge", null, "≥"),
+          createSymbolItem("ml-alg-ne", "\\ne", null, "≠"),
+          createSymbolItem("ml-alg-approx", "\\approx", null, "≈")
         ]
       },
       {
         type: "submenu",
-        id: "custom-insert-sets-logic",
-        label: "Number Sets & Logic",
+        id: "ml-grp-numsets",
+        label: "Insert Tập số",
         submenu: [
-          createInsertItem("custom-set-n", "ℕ (Natural)", "\\mathbb{N}"),
-          createInsertItem("custom-set-n-star", "ℕ* (Positive integers)", "\\mathbb{N}^*"),
-          createInsertItem("custom-set-z", "ℤ (Integers)", "\\mathbb{Z}"),
-          createInsertItem("custom-set-q", "ℚ (Rationals)", "\\mathbb{Q}"),
-          createInsertItem("custom-set-r", "ℝ (Reals)", "\\mathbb{R}"),
-          createInsertItem("custom-set-c", "ℂ (Complex)", "\\mathbb{C}"),
-          { type: "divider" },
-          createInsertItem("custom-op-in", "∈ (Element of)", "\\in"),
-          createInsertItem("custom-op-notin", "∉ (Not element of)", "\\notin"),
-          createInsertItem("custom-op-subset", "⊂ (Subset)", "\\subset"),
-          createInsertItem("custom-op-cup", "∪ (Union)", "\\cup"),
-          createInsertItem("custom-op-cap", "∩ (Intersection)", "\\cap"),
-          createInsertItem("custom-op-setminus", "\\ (Set difference)", "\\setminus"),
-          createInsertItem("custom-op-emptyset", "∅ (Empty set)", "\\emptyset"),
-          { type: "divider" },
-          createInsertItem("custom-logic-forall", "∀ (For all)", "\\forall"),
-          createInsertItem("custom-logic-exists", "∃ (Exists)", "\\exists"),
-          createInsertItem("custom-logic-implies", "⇒ (Implies)", "\\Rightarrow"),
-          createInsertItem("custom-logic-iff", "⇔ (If and only if)", "\\Leftrightarrow")
+          createSymbolItem("ml-num-n", "\\mathbb{N}", null, "ℕ"),
+          createSymbolItem("ml-num-nstar", "\\mathbb{N}^*", "\\mathbb{N}^{*}", "ℕ*"),
+          createSymbolItem("ml-num-z", "\\mathbb{Z}", null, "ℤ"),
+          createSymbolItem("ml-num-q", "\\mathbb{Q}", null, "ℚ"),
+          createSymbolItem("ml-num-r", "\\mathbb{R}", null, "ℝ"),
+          createSymbolItem("ml-num-c", "\\mathbb{C}", null, "ℂ")
         ]
       },
       {
         type: "submenu",
-        id: "custom-insert-systems",
-        label: "Systems & Brackets",
+        id: "ml-grp-sets",
+        label: "Insert Tập hợp",
         submenu: [
-          createInsertItem(
-            "custom-sys-2",
-            "System of 2 equations",
-            "\\begin{cases} #? \\\\ #? \\end{cases}"
+          createSymbolItem("ml-set-in", "\\in", null, "∈"),
+          createSymbolItem("ml-set-notin", "\\notin", null, "∉"),
+          createSymbolItem("ml-set-subset", "\\subset", null, "⊂"),
+          createSymbolItem("ml-set-supset", "\\supset", null, "⊃"),
+          createSymbolItem("ml-set-cup", "\\cup", null, "∪"),
+          createSymbolItem("ml-set-cap", "\\cap", null, "∩"),
+          createSymbolItem("ml-set-setminus", "\\setminus", null, "∖"),
+          createSymbolItem("ml-set-empty", "\\emptyset", null, "∅")
+        ]
+      },
+      {
+        type: "submenu",
+        id: "ml-grp-logic",
+        label: "Insert Logic",
+        submenu: [
+          createSymbolItem("ml-log-forall", "\\forall", null, "∀"),
+          createSymbolItem("ml-log-exists", "\\exists", null, "∃"),
+          createSymbolItem("ml-log-implies", "\\Rightarrow", null, "⇒"),
+          createSymbolItem("ml-log-iff", "\\Leftrightarrow", null, "⇔"),
+          createSymbolItem("ml-log-neg", "\\neg", null, "¬"),
+          createSymbolItem("ml-log-wedge", "\\wedge", null, "∧"),
+          createSymbolItem("ml-log-vee", "\\vee", null, "∨")
+        ]
+      },
+      {
+        type: "submenu",
+        id: "ml-grp-limits",
+        label: "Insert Giới hạn (Lim)",
+        submenu: [
+          createSymbolItem("ml-lim-point", "\\lim_{x \\to #?} #0", "\\lim_{x\\to a}", "lim(x→a)"),
+          createSymbolItem("ml-lim-right", "\\lim_{x \\to #?^+} #0", "\\lim_{x\\to a^{+}}", "lim(x→a⁺)"),
+          createSymbolItem("ml-lim-left", "\\lim_{x \\to #?^-} #0", "\\lim_{x\\to a^{-}}", "lim(x→a⁻)"),
+          createSymbolItem("ml-lim-posinf", "\\lim_{x \\to +\\infty} #0", "\\lim_{x\\to +\\infty}", "lim(x→+∞)"),
+          createSymbolItem("ml-lim-neginf", "\\lim_{x \\to -\\infty} #0", "\\lim_{x\\to -\\infty}", "lim(x→−∞)"),
+          createSymbolItem("ml-lim-seq", "\\lim_{n \\to +\\infty} #0", "\\lim_{n\\to +\\infty}", "lim(n→+∞)"),
+          createSymbolItem("ml-lim-inf", "\\infty", null, "∞")
+        ]
+      },
+      {
+        type: "submenu",
+        id: "ml-grp-calculus",
+        label: "Insert Giải tích",
+        submenu: [
+          createSymbolItem("ml-calc-int", "\\int #? \\, dx", "\\int f\\,dx", "∫ f dx"),
+          createSymbolItem("ml-calc-defint", "\\int_{#?}^{#?} #? \\, dx", "\\int_{a}^{b} f\\,dx", "∫ₐᵇ f dx"),
+          createSymbolItem("ml-calc-eval", "\\left. #? \\right|_{#?}^{#?}", "\\left.F\\right|_{a}^{b}", "F|ₐᵇ"),
+          createSymbolItem("ml-calc-deriv1", "f'(x)", "f'(x)", "f'(x)"),
+          createSymbolItem("ml-calc-deriv2", "f''(x)", "f''(x)", "f''(x)"),
+          createSymbolItem("ml-calc-sum", "\\sum_{i=#?}^{#?} #?", "\\sum_{i=1}^{n}", "∑ᵢ₌₁ⁿ"),
+          createSymbolItem("ml-calc-prod", "\\prod_{i=#?}^{#?} #?", "\\prod_{i=1}^{n}", "∏ᵢ₌₁ⁿ")
+        ]
+      },
+      {
+        type: "submenu",
+        id: "ml-grp-systems",
+        label: "Insert Hệ PT & Hoặc",
+        submenu: [
+          createSymbolItem(
+            "ml-sys-2",
+            "\\begin{cases} #? \\\\ #? \\end{cases}",
+            "\\begin{cases}\\square\\\\\\square\\end{cases}",
+            "{ □ ; □"
           ),
-          createInsertItem(
-            "custom-sys-3",
-            "System of 3 equations",
-            "\\begin{cases} #? \\\\ #? \\\\ #? \\end{cases}"
+          createSymbolItem(
+            "ml-sys-3",
+            "\\begin{cases} #? \\\\ #? \\\\ #? \\end{cases}",
+            "\\begin{cases}\\square\\\\\\square\\\\\\square\\end{cases}",
+            "{ □ ; □ ; □"
           ),
-          createInsertItem(
-            "custom-sys-or",
-            "Or / Square bracket",
-            "\\left[ \\begin{array}{l} #? \\\\ #? \\end{array} \\right."
-          ),
-          createInsertItem(
-            "custom-eval-bar",
-            "Evaluation bar / Newton-Leibniz",
-            "\\left. #? \\right|_{#?}^{#?}"
+          createSymbolItem(
+            "ml-sys-or",
+            "\\left[ \\begin{array}{l} #? \\\\ #? \\end{array} \\right.",
+            "\\left[\\begin{array}{l}\\square\\\\\\square\\end{array}\\right.",
+            "[ □ ; □"
           )
         ]
       },
       {
         type: "submenu",
-        id: "custom-insert-geometry",
-        label: "Geometry & Combinatorics",
+        id: "ml-grp-geometry",
+        label: "Insert Hình học & Tổ hợp",
         submenu: [
-          createInsertItem("custom-geo-vec1", "Vector 1 letter", "\\vec{#@}"),
-          createInsertItem("custom-geo-vec2", "Vector 2 letters", "\\overrightarrow{#@}"),
-          createInsertItem("custom-geo-angle", "Angle", "\\widehat{#@}"),
-          { type: "divider" },
-          createInsertItem("custom-geo-degree", "Degree (°)", "^\\circ"),
-          createInsertItem("custom-geo-perp", "Perpendicular (⊥)", "\\perp"),
-          createInsertItem("custom-geo-parallel", "Parallel (∥)", "\\parallel"),
-          { type: "divider" },
-          createInsertItem("custom-comb-c", "Combination (C_n^k)", "C_{#?}^{#?}"),
-          createInsertItem("custom-comb-a", "Permutation (A_n^k)", "A_{#?}^{#?}")
+          createSymbolItem("ml-geo-vec1", "\\vec{#@}", "\\vec{a}", "a⃗"),
+          createSymbolItem("ml-geo-vec2", "\\overrightarrow{#@}", "\\overrightarrow{AB}", "AB⃗"),
+          createSymbolItem("ml-geo-angle", "\\widehat{#@}", "\\widehat{A}", "Â"),
+          createSymbolItem("ml-geo-deg", "^\\circ", "^{\\circ}", "°"),
+          createSymbolItem("ml-geo-perp", "\\perp", null, "⊥"),
+          createSymbolItem("ml-geo-parallel", "\\parallel", null, "∥"),
+          createSymbolItem("ml-geo-sim", "\\sim", null, "∼"),
+          createSymbolItem("ml-comb-c", "C_{#?}^{#?}", "C_{n}^{k}", "Cₙᵏ"),
+          createSymbolItem("ml-comb-a", "A_{#?}^{#?}", "A_{n}^{k}", "Aₙᵏ"),
+          createSymbolItem("ml-comb-fact", "#@!", "n!", "n!")
         ]
       }
     ];
   }
 
   /**
-   * Nối thêm 4 nhóm công thức Toán phổ thông vào menu nút ba gạch (≡) của <math-field>
-   * mà vẫn giữ nguyên toàn bộ menu mặc định của MathLive (Cut, Copy, Paste, Mode, Color...).
+   * Trích xuất có chọn lọc tối đa 4 mục định dạng hữu ích từ menu mặc định của MathLive:
+   * Insert Matrix, Mode, Font Style, Color — loại bỏ hoàn toàn Cut, Copy, Paste, Select All,
+   * Speak, Compute Engine và các đường kẻ thừa.
+   */
+  function extractCompactMathLiveDefaults(defaultItems) {
+    if (!Array.isArray(defaultItems) || defaultItems.length === 0) return [];
+
+    let matrixItem = null;
+    let modeItem = null;
+    let fontStyleItem = null;
+    let colorItem = null;
+
+    const visit = (items) => {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (!item || item.type === "divider") continue;
+        const id = typeof item.id === "string" ? item.id.toLowerCase() : "";
+        const label = typeof item.label === "string" ? item.label.toLowerCase() : "";
+
+        // Loại bỏ tuyệt đối các lệnh clipboard / selection / speak / compute engine
+        if (
+          id === "cut" ||
+          id === "copy" ||
+          id === "paste" ||
+          id === "select-all" ||
+          id.startsWith("copy-") ||
+          id.startsWith("ce-") ||
+          id === "speak" ||
+          id === "undo" ||
+          id === "redo"
+        ) {
+          continue;
+        }
+
+        if (!matrixItem && (id === "insert-matrix" || id.includes("matrix") || label.includes("matrix"))) {
+          matrixItem = item;
+          continue;
+        }
+        if (!modeItem && id === "mode") {
+          modeItem = item;
+          continue;
+        }
+        if (!fontStyleItem && (id === "font-style" || id === "style" || id === "variant")) {
+          fontStyleItem = item;
+          continue;
+        }
+        if (!colorItem && (id === "color" || id === "text-color")) {
+          colorItem = item;
+          continue;
+        }
+
+        if (id === "insert" && Array.isArray(item.submenu)) {
+          visit(item.submenu);
+        }
+      }
+    };
+
+    visit(defaultItems);
+
+    const kept = [];
+    if (matrixItem) kept.push(matrixItem);
+    if (modeItem) kept.push(modeItem);
+    if (fontStyleItem) kept.push(fontStyleItem);
+    if (colorItem) kept.push(colorItem);
+    return kept;
+  }
+
+  /**
+   * Tiêm quy tắc CSS chống tràn màn hình vào Shadow DOM của <math-field> (nếu có)
+   * để đảm bảo menu popup không vượt quá 95vw trên khung Task Pane hẹp.
+   */
+  function injectCompactMathLiveShadowCss(mf) {
+    if (!mf || !mf.shadowRoot) return;
+    try {
+      if (mf.shadowRoot.querySelector('style[data-compact-ml-menu="1"]')) return;
+      const style = document.createElement("style");
+      style.setAttribute("data-compact-ml-menu", "1");
+      style.textContent =
+        ":host { --_menu-max-width: 95vw; }\n" +
+        "[role='menu'], .ui-menu-container, .ML__menu { max-width: 95vw !important; box-sizing: border-box !important; }\n" +
+        ".ml-menu-sym { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; padding: 1px 4px; font-family: 'Cambria Math', 'STIX Two Math', 'Times New Roman', serif; font-size: 14px; line-height: 1.2; white-space: nowrap; }\n" +
+        ".ml-menu-sym.ml-menu-math math { font-size: 13.5px; line-height: 1.15; }";
+      mf.shadowRoot.appendChild(style);
+    } catch (_err) {
+      // Bỏ qua nếu Shadow DOM ở chế độ closed
+    }
+  }
+
+  /**
+   * Thiết kế lại hoàn toàn menu nút ba gạch (≡) của <math-field> theo cấu trúc 3 cấp siêu gọn:
+   * - Cấp 1: Nút ba gạch (≡)
+   * - Cấp 2: 8 nhóm Insert gọn gàng (+ tùy chọn Insert Matrix, Mode, Font Style, Color)
+   * - Cấp 3: Chỉ hiển thị ký hiệu/công thức toán học thuần (không chữ chú thích, không aside)
    */
   function extendMathLiveMenuItems(mf, attempt) {
     if (!mf || state.mathLiveMenuCustomized) return false;
@@ -7111,48 +7275,18 @@
       return false;
     }
 
-    // Tránh gắn trùng nếu đã nối trước đó
-    const alreadyInjected = currentItems.some(
-      (item) =>
-        item &&
-        (item.id === "custom-insert-limits" ||
-          (Array.isArray(item.submenu) &&
-            item.submenu.some((sub) => sub && sub.id === "custom-insert-limits")))
-    );
-    if (alreadyInjected) {
-      state.mathLiveMenuCustomized = true;
-      return true;
-    }
+    injectCompactMathLiveShadowCss(mf);
 
-    const customSubmenus = buildCustomMathLiveSubmenus(mf);
-    const insertIdx = currentItems.findIndex(
-      (item) => item && typeof item.id === "string" && item.id.toLowerCase() === "insert"
-    );
+    const insertGroups = buildCustomMathLiveSubmenus(mf);
+    const keptDefaults = extractCompactMathLiveDefaults(currentItems);
 
-    let updatedItems;
-    if (insertIdx !== -1 && Array.isArray(currentItems[insertIdx].submenu)) {
-      // Nối trực tiếp vào bên trong mục Insert mặc định của MathLive (không mutate mảng read-only)
-      updatedItems = currentItems.map((item, idx) => {
-        if (idx !== insertIdx) return item;
-        return {
-          ...item,
-          submenu: [...item.submenu, { type: "divider" }, ...customSubmenus]
-        };
-      });
-    } else if (insertIdx !== -1) {
-      // Nếu mục Insert không có submenu, chèn 4 submenu gọn gàng ngay bên dưới Insert
-      updatedItems = [
-        ...currentItems.slice(0, insertIdx + 1),
-        ...customSubmenus,
-        ...currentItems.slice(insertIdx + 1)
-      ];
-    } else {
-      // Giữ toàn bộ menu mặc định và nối thêm 4 submenu ở cuối
-      updatedItems = [...currentItems, { type: "divider" }, ...customSubmenus];
-    }
+    const compactMenu =
+      keptDefaults.length > 0
+        ? [...insertGroups, { type: "divider" }, ...keptDefaults]
+        : [...insertGroups];
 
     try {
-      mf.menuItems = updatedItems;
+      mf.menuItems = compactMenu;
       state.mathLiveMenuCustomized = true;
       return true;
     } catch (_err) {
