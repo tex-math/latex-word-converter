@@ -387,7 +387,24 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
+      flex-wrap: wrap;
+      gap: 6px 8px;
+    }
+
+    .mt-png-toggle {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .mt-png-toggle input[type="checkbox"] {
+      margin: 0;
+      accent-color: #d97706;
+      cursor: pointer;
     }
 
     .mt-size-select {
@@ -1098,6 +1115,10 @@
               <option value="16">16pt</option>
             </select>
           </div>
+          <label class="mt-png-toggle" for="optMathTypePng">
+            <input type="checkbox" id="optMathTypePng" />
+            <span>Dùng ảnh PNG nét cao (300 DPI)</span>
+          </label>
           <button type="button" id="btnLatexToMathType" class="btn btn-orange">
             Đổi tất cả $...$ sang MathType
           </button>

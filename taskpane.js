@@ -212,6 +212,7 @@
     dom.btnScanPreview = document.getElementById("btnScanPreview");
     dom.btnBatchReverse = document.getElementById("btnBatchReverse");
     dom.optMathTypeFontSize = document.getElementById("optMathTypeFontSize");
+    dom.optMathTypePng = document.getElementById("optMathTypePng");
     dom.btnLatexToMathType = document.getElementById("btnLatexToMathType");
     dom.btnConvertMathType = document.getElementById("btnConvertMathType");
     dom.mtPreviewCanvas = document.getElementById("mtPreviewCanvas");
@@ -530,6 +531,7 @@
       dom.btnBatchReverse,
       dom.btnLatexToMathType,
       dom.optMathTypeFontSize,
+      dom.optMathTypePng,
       dom.btnConvertMathType,
       dom.btnVisualReadNow,
       dom.btnVisualUpdateMathType,
@@ -5657,7 +5659,7 @@
    * Trả về { emfBase64, emfBytes, widthPt, heightPt, depthPt } với depthPt là khoảng cách
    * từ đường cơ sở (baseline của dấu '=') xuống đáy công thức để căn <w:position> chuẩn xác.
    */
-  function renderAstToEmf(astNodes, fontSizePt, displayMode) {
+  function layoutAstVectorMetrics(astNodes, fontSizePt, displayMode) {
     const UNITS_PER_PT = 20; // 1 pt = 20 twips (1440 DPI -> khớp hoàn toàn đơn vị dxa của Word)
     const baseSizePt = Number(fontSizePt || 12) * (displayMode ? 1.08 : 1.0);
     const baseSizeU = Math.round(baseSizePt * UNITS_PER_PT);
@@ -6124,7 +6126,52 @@
     const heightPt = Number((heightU / UNITS_PER_PT).toFixed(2));
     const depthPt = Number((depthU / UNITS_PER_PT).toFixed(2));
 
-    // 2. Bộ ghi bản ghi nhị phân MS-EMF (4-byte aligned records)
+    // Quy đổi chuẩn 96 DPI (1 pt = 96/72 px) dùng cho MM_TEXT của Windows GDI và Canvas 2D
+    const PX_PER_PT = 96 / 72;
+    const PX_PER_U = PX_PER_PT / UNITS_PER_PT;
+    const widthPx = Math.max(8, Math.round(widthPt * PX_PER_PT));
+    const heightPx = Math.max(10, Math.round(heightPt * PX_PER_PT));
+
+    return {
+      rootBox,
+      padX,
+      padY,
+      baselineY,
+      widthU,
+      heightU,
+      widthPt,
+      heightPt,
+      depthPt,
+      widthPx,
+      heightPx,
+      PX_PER_U
+    };
+  }
+
+  /**
+   * Tạo tệp ảnh vector nhị phân MS-EMF (Enhanced Metafile) chuẩn Windows GDI 96 DPI (MM_TEXT):
+   * - EMR_HEADER (108 bytes): rclBounds [0,0,widthPx,heightPx], rclFrame [0,0,round(widthPt*35.2778),round(heightPt*35.2778)],
+   *   szlDevice [1920,1080], szlMillimeters [508,286], szlMicrometers [508000,286000].
+   * - Thiết lập trước khi vẽ: EMR_SETMAPMODE (17, MM_TEXT=1), EMR_SETBKMODE (18, TRANSPARENT=1),
+   *   EMR_SETTEXTCOLOR (24, 0x00000000), EMR_SETTEXTALIGN (22, TA_LEFT|TA_BASELINE=24).
+   * - EMR_EXTTEXTOUTW (84): GM_COMPATIBLE (1), exScale=1.0, eyScale=1.0, offString=76, offDx=0, 4-byte padded UTF-16LE.
+   * - Chọn font Times New Roman trước khi vẽ và trả lại STOCK_OBJECT trước khi EMR_DELETEOBJECT.
+   */
+  function buildEmfBase64(astNodes, fontSizePt, displayMode) {
+    const layout = layoutAstVectorMetrics(astNodes, fontSizePt, displayMode);
+    const {
+      rootBox,
+      padX,
+      baselineY,
+      widthPt,
+      heightPt,
+      depthPt,
+      widthPx,
+      heightPx,
+      PX_PER_U
+    } = layout;
+
+    // Bộ ghi bản ghi nhị phân MS-EMF (4-byte aligned records)
     const chunks = [];
     let totalBytes = 0;
     let recordCount = 0;
@@ -6151,40 +6198,12 @@
       dv.setUint16(byteOffset + len * 2, 0, true);
     }
 
-    // Bản ghi 0: EMR_HEADER (108 bytes — sẽ cập nhật lại nBytes, nRecords, nHandles ở bước cuối)
-    const headerRec = makeRec(1, 108);
-    const hdv = headerRec.dv;
-    // rclBounds (inclusive logical/device units)
-    hdv.setInt32(8, 0, true);
-    hdv.setInt32(12, 0, true);
-    hdv.setInt32(16, widthU, true);
-    hdv.setInt32(20, heightU, true);
-    // rclFrame (0.01 mm HIMETRIC: 1 pt = 2540/72 = 35.2778)
-    const frameW = Math.max(1, Math.round((widthU / UNITS_PER_PT) * 2540 / 72));
-    const frameH = Math.max(1, Math.round((heightU / UNITS_PER_PT) * 2540 / 72));
-    hdv.setInt32(24, 0, true);
-    hdv.setInt32(28, 0, true);
-    hdv.setInt32(32, frameW, true);
-    hdv.setInt32(36, frameH, true);
-    // dSignature = " EMF" (0x464D4520), nVersion = 0x00010000
-    hdv.setUint32(40, 0x464d4520, true);
-    hdv.setUint32(44, 0x00010000, true);
-    // szlDevice = (14400, 14400) units = 10 inches @ 1440 DPI; szlMillimeters = (254, 254) mm = 10 inches
-    hdv.setInt32(72, 14400, true);
-    hdv.setInt32(76, 14400, true);
-    hdv.setInt32(80, 254, true);
-    hdv.setInt32(84, 254, true);
-    // szlMicrometers = (254000, 254000) um
-    hdv.setInt32(100, 254000, true);
-    hdv.setInt32(104, 254000, true);
-    pushRecord(headerRec.buf);
-
-    // Thiết lập hệ tọa độ chuẩn (MM_ANISOTROPIC + Window/Viewport Ext/Org)
     function emitU32Rec(type, val) {
       const r = makeRec(type, 12);
       r.dv.setUint32(8, val, true);
       pushRecord(r.buf);
     }
+
     function emitPointRec(type, x, y) {
       const r = makeRec(type, 16);
       r.dv.setInt32(8, Math.round(x), true);
@@ -6192,14 +6211,39 @@
       pushRecord(r.buf);
     }
 
-    emitU32Rec(17, 8);                  // EMR_SETMAPMODE (MM_ANISOTROPIC = 8)
-    emitPointRec(9, widthU, heightU);   // EMR_SETWINDOWEXTEX
-    emitPointRec(11, widthU, heightU);  // EMR_SETVIEWPORTEXTEX
-    emitPointRec(10, 0, 0);             // EMR_SETWINDOWORGEX
-    emitPointRec(12, 0, 0);             // EMR_SETVIEWPORTORGEX
-    emitU32Rec(18, 1);                  // EMR_SETBKMODE (TRANSPARENT = 1)
-    emitU32Rec(24, 0x00000000);         // EMR_SETTEXTCOLOR (RGB Black)
-    emitU32Rec(22, 0x00000018);         // EMR_SETTEXTALIGN (TA_LEFT | TA_BASELINE)
+    // Bản ghi 0: EMR_HEADER (108 bytes — sẽ cập nhật nBytes, nRecords, nHandles ở bước cuối)
+    const headerRec = makeRec(1, 108);
+    const hdv = headerRec.dv;
+    // rclBounds (inclusive pixel bounds ở 96 DPI)
+    hdv.setInt32(8, 0, true);
+    hdv.setInt32(12, 0, true);
+    hdv.setInt32(16, widthPx, true);
+    hdv.setInt32(20, heightPx, true);
+    // rclFrame (0.01 mm HIMETRIC: 1 pt = 35.2778)
+    const frameW = Math.max(1, Math.round(widthPt * 35.2778));
+    const frameH = Math.max(1, Math.round(heightPt * 35.2778));
+    hdv.setInt32(24, 0, true);
+    hdv.setInt32(28, 0, true);
+    hdv.setInt32(32, frameW, true);
+    hdv.setInt32(36, frameH, true);
+    // dSignature = " EMF" (0x464D4520), nVersion = 0x00010000
+    hdv.setUint32(40, 0x464d4520, true);
+    hdv.setUint32(44, 0x00010000, true);
+    // szlDevice = [1920, 1080], szlMillimeters = [508, 286] (chuẩn 96 DPI)
+    hdv.setInt32(72, 1920, true);
+    hdv.setInt32(76, 1080, true);
+    hdv.setInt32(80, 508, true);
+    hdv.setInt32(84, 286, true);
+    // szlMicrometers = [508000, 286000] (khớp szlMillimeters * 1000)
+    hdv.setInt32(100, 508000, true);
+    hdv.setInt32(104, 286000, true);
+    pushRecord(headerRec.buf);
+
+    // Các bản ghi thiết lập GDI bắt buộc trước khi vẽ
+    emitU32Rec(17, 1);          // EMR_SETMAPMODE (MM_TEXT = 1)
+    emitU32Rec(18, 1);          // EMR_SETBKMODE (TRANSPARENT = 1)
+    emitU32Rec(24, 0x00000000); // EMR_SETTEXTCOLOR (RGB Black)
+    emitU32Rec(22, 24);         // EMR_SETTEXTALIGN (TA_LEFT | TA_BASELINE = 24)
 
     // Quản lý handle GDI (font Times New Roman & pen nét vẽ)
     let nextHandle = 1;
@@ -6214,34 +6258,39 @@
     }
 
     function ensureFont(sizeU, italic, bold) {
-      const h = Math.max(80, Math.round(sizeU));
-      const key = h + "_" + (italic ? 1 : 0) + "_" + (bold ? 1 : 0);
+      const heightPxFont = Math.max(8, Math.round(sizeU * PX_PER_U));
+      const key = heightPxFont + "_" + (italic ? 1 : 0) + "_" + (bold ? 1 : 0);
       let handle = fontHandles.get(key);
       if (!handle) {
         handle = nextHandle++;
         fontHandles.set(key, handle);
         allocatedHandles.push(handle);
 
-        // EMR_EXTCREATEFONTINDIRECTW (Type 82, 332 bytes — LogFontPanose)
+        // EMR_EXTCREATEFONTINDIRECTW (Type 82, 332 bytes — EXTLOGFONTW)
         const rec = makeRec(82, 332);
         const dv = rec.dv;
         dv.setUint32(8, handle, true);
-        dv.setInt32(12, -h, true); // lfHeight âm = chiều cao ký tự chính xác theo logical units
-        dv.setInt32(16, 0, true);  // lfWidth = 0 (tự động theo tỷ lệ font)
-        dv.setInt32(20, 0, true);  // lfEscapement
-        dv.setInt32(24, 0, true);  // lfOrientation
+        dv.setInt32(12, -heightPxFont, true);    // lfHeight âm = chiều cao ký tự theo pixel 96 DPI
+        dv.setInt32(16, 0, true);                // lfWidth = 0
+        dv.setInt32(20, 0, true);                // lfEscapement
+        dv.setInt32(24, 0, true);                // lfOrientation
         dv.setInt32(28, bold ? 700 : 400, true); // lfWeight
         dv.setUint8(32, italic ? 1 : 0);         // lfItalic
         dv.setUint8(33, 0);                      // lfUnderline
         dv.setUint8(34, 0);                      // lfStrikeOut
-        dv.setUint8(35, 1);                      // lfCharSet = DEFAULT_CHARSET (Unicode đầy đủ)
+        dv.setUint8(35, 1);                      // lfCharSet = DEFAULT_CHARSET
         dv.setUint8(36, 0);                      // lfOutPrecision
         dv.setUint8(37, 0);                      // lfClipPrecision
         dv.setUint8(38, 4);                      // lfQuality = ANTIALIASED_QUALITY
         dv.setUint8(39, 0x12);                   // lfPitchAndFamily = VARIABLE_PITCH | FF_ROMAN
         writeUtf16Fixed(dv, 40, "Times New Roman", 32);
         writeUtf16Fixed(dv, 104, "Times New Roman", 64);
-        writeUtf16Fixed(dv, 232, bold ? (italic ? "Bold Italic" : "Bold") : (italic ? "Italic" : "Regular"), 32);
+        writeUtf16Fixed(
+          dv,
+          232,
+          bold ? (italic ? "Bold Italic" : "Bold") : (italic ? "Italic" : "Regular"),
+          32
+        );
         pushRecord(rec.buf);
       }
 
@@ -6252,11 +6301,11 @@
     }
 
     function ensurePen(strokeU) {
-      const w = Math.max(8, Math.round(strokeU));
-      let handle = penHandles.get(w);
+      const wPx = Math.max(1, Math.round(strokeU * PX_PER_U));
+      let handle = penHandles.get(wPx);
       if (!handle) {
         handle = nextHandle++;
-        penHandles.set(w, handle);
+        penHandles.set(wPx, handle);
         allocatedHandles.push(handle);
 
         // EMR_CREATEPEN (Type 38, 28 bytes)
@@ -6264,7 +6313,7 @@
         const dv = rec.dv;
         dv.setUint32(8, handle, true);
         dv.setUint32(12, 0, true);          // PS_SOLID
-        dv.setInt32(16, w, true);           // Width.x
+        dv.setInt32(16, wPx, true);         // Width.x (pixel)
         dv.setInt32(20, 0, true);           // Width.y
         dv.setUint32(24, 0x00000000, true); // RGB Black
         pushRecord(rec.buf);
@@ -6277,7 +6326,7 @@
     }
 
     const emfDriver = {
-      drawText(str, dxArr, x, y, sizeU, italic, bold, runW) {
+      drawText(str, _dxArr, x, y, sizeU, italic, bold, runW) {
         if (!str || str.length === 0) return;
         ensureFont(sizeU, italic, bold);
 
@@ -6285,80 +6334,85 @@
         const strBytes = nChars * 2;
         const alignedStrBytes = Math.ceil(strBytes / 4) * 4;
         const offString = 76;
-        const offDx = offString + alignedStrBytes;
-        const recSize = offDx + nChars * 4;
+        const recSize = offString + alignedStrBytes; // Tổng độ dài luôn chia hết cho 4, không truyền Dx
 
         // EMR_EXTTEXTOUTW (Type 84)
         const rec = makeRec(84, recSize);
         const dv = rec.dv;
-        const rx = Math.round(x);
-        const ry = Math.round(y);
+        const rx = Math.round(x * PX_PER_U);
+        const ry = Math.round(y * PX_PER_U);
+        const sizePx = Math.max(8, Math.round(sizeU * PX_PER_U));
+        const runWPx = Math.max(4, Math.round(runW * PX_PER_U));
+
+        const bLeft = Math.max(0, Math.min(widthPx, rx));
+        const bTop = Math.max(0, Math.min(heightPx, ry - sizePx));
+        const bRight = Math.max(bLeft, Math.min(widthPx, rx + runWPx));
+        const bBottom = Math.max(bTop, Math.min(heightPx, ry + Math.round(sizePx * 0.35)));
+
         // rclBounds
-        dv.setInt32(8, Math.max(0, rx), true);
-        dv.setInt32(12, Math.max(0, ry - Math.round(sizeU * 0.9)), true);
-        dv.setInt32(16, Math.min(widthU, rx + Math.round(runW)), true);
-        dv.setInt32(20, Math.min(heightU, ry + Math.round(sizeU * 0.35)), true);
-        dv.setUint32(24, 1, true);               // iGraphicsMode = GM_COMPATIBLE (chuẩn GDI / MathType)
-        dv.setFloat32(28, 2540 / 1440, true);    // exScale (0.01mm / logical unit ở 1440 DPI)
-        dv.setFloat32(32, 2540 / 1440, true);    // eyScale
-        // EmrText header
+        dv.setInt32(8, bLeft, true);
+        dv.setInt32(12, bTop, true);
+        dv.setInt32(16, bRight, true);
+        dv.setInt32(20, bBottom, true);
+        dv.setUint32(24, 1, true);       // iGraphicsMode = GM_COMPATIBLE (1)
+        dv.setFloat32(28, 1.0, true);    // exScale = 1.0
+        dv.setFloat32(32, 1.0, true);    // eyScale = 1.0
+        // EmrText header (bắt đầu tại byte 36, dài đúng 40 bytes -> kết thúc tại byte 76)
         dv.setInt32(36, rx, true);       // Reference.x
         dv.setInt32(40, ry, true);       // Reference.y (TA_BASELINE)
-        dv.setUint32(44, nChars, true);  // Chars
-        dv.setUint32(48, offString, true);
-        dv.setUint32(52, 0, true);       // Options = ETO_NONE
-        dv.setInt32(56, 0, true);        // Rectangle.left..bottom = 0
-        dv.setInt32(60, 0, true);
-        dv.setInt32(64, 0, true);
-        dv.setInt32(68, 0, true);
-        dv.setUint32(72, offDx, true);   // offDx
+        dv.setUint32(44, nChars, true);  // nChars
+        dv.setUint32(48, offString, true); // offString = 76
+        dv.setUint32(52, 0, true);       // fOptions = 0
+        dv.setInt32(56, 0, true);        // rcl.left
+        dv.setInt32(60, 0, true);        // rcl.top
+        dv.setInt32(64, 0, true);        // rcl.right
+        dv.setInt32(68, 0, true);        // rcl.bottom
+        dv.setUint32(72, 0, true);       // offDx = 0 (không truyền mảng Dx)
 
+        // Chuỗi UTF-16LE tại byte 76 (các byte dư tới alignedStrBytes mặc định đã là 0x00)
         for (let i = 0; i < nChars; i++) {
           dv.setUint16(offString + i * 2, str.charCodeAt(i), true);
-        }
-        for (let i = 0; i < nChars; i++) {
-          dv.setUint32(offDx + i * 4, Math.max(1, Math.round(dxArr[i] || sizeU * 0.5)), true);
         }
         pushRecord(rec.buf);
       },
 
       drawLine(x1, y1, x2, y2, strokeU) {
         ensurePen(strokeU);
-        emitPointRec(27, x1, y1); // EMR_MOVETOEX
-        emitPointRec(54, x2, y2); // EMR_LINETO
+        emitPointRec(27, x1 * PX_PER_U, y1 * PX_PER_U); // EMR_MOVETOEX
+        emitPointRec(54, x2 * PX_PER_U, y2 * PX_PER_U); // EMR_LINETO
       },
 
       drawPolyline(points, strokeU) {
         if (!points || points.length < 2) return;
         ensurePen(strokeU);
-        emitPointRec(27, points[0][0], points[0][1]); // EMR_MOVETOEX
+        emitPointRec(27, points[0][0] * PX_PER_U, points[0][1] * PX_PER_U); // EMR_MOVETOEX
         for (let i = 1; i < points.length; i++) {
-          emitPointRec(54, points[i][0], points[i][1]); // EMR_LINETO
+          emitPointRec(54, points[i][0] * PX_PER_U, points[i][1] * PX_PER_U); // EMR_LINETO
         }
       }
     };
 
-    // 3. Vẽ toàn bộ cây công thức toán học ra các bản ghi vector EMF
+    // Vẽ toàn bộ cây công thức toán học ra các bản ghi vector EMF
     rootBox.draw(emfDriver, padX, baselineY);
 
-    // 4. Trả lại stock objects & xóa toàn bộ GDI handle đã cấp phát (EMR_DELETEOBJECT)
+    // Chọn lại STOCK_OBJECT trước khi EMR_DELETEOBJECT để giải phóng sạch handle GDI
     if (activeFontHandle) selectObject(0x8000000d); // SYSTEM_FONT
     if (activePenHandle) selectObject(0x80000007);  // BLACK_PEN
     for (let i = 0; i < allocatedHandles.length; i++) {
       emitU32Rec(40, allocatedHandles[i]); // EMR_DELETEOBJECT
     }
 
-    // 5. Bản ghi cuối: EMR_EOF (Type 14, 20 bytes)
+    // Bản ghi cuối: EMR_EOF (Type 14, 20 bytes)
     const eofRec = makeRec(14, 20);
     eofRec.dv.setUint32(8, 0, true);   // nPalEntries
     eofRec.dv.setUint32(12, 16, true); // offPalEntries
     eofRec.dv.setUint32(16, 20, true); // nSizeLast
     pushRecord(eofRec.buf);
 
-    // 6. Cập nhật lại tổng kích thước, tổng số bản ghi & tổng số handle vào EMR_HEADER
-    hdv.setUint32(48, totalBytes, true);   // nBytes
-    hdv.setUint32(52, recordCount, true);  // nRecords
-    hdv.setUint16(56, nextHandle, true);   // nHandles = maxHandle + 1
+    // Cập nhật chính xác tổng số byte (nBytes), tổng số bản ghi (nRecords) và số handle (nHandles)
+    hdv.setUint32(48, totalBytes, true);  // nBytes
+    hdv.setUint32(52, recordCount, true); // nRecords
+    hdv.setUint16(56, nextHandle, true);  // nHandles = maxHandle + 1
 
     const emfBytes = new Uint8Array(totalBytes);
     let cursor = 0;
@@ -6367,31 +6421,156 @@
       cursor += chunks[i].length;
     }
 
+    const emfBase64 = uint8ArrayToBase64(emfBytes);
     return {
+      imageFormat: "emf",
       emfBytes,
-      emfBase64: uint8ArrayToBase64(emfBytes),
+      emfBase64,
+      imageBase64: emfBase64,
       widthPt,
       heightPt,
-      depthPt
+      depthPt,
+      widthPx,
+      heightPx
     };
   }
 
+  /**
+   * Tùy chọn dự phòng an toàn: Vẽ công thức trực tiếp bằng Canvas 2D độ phân giải cao (scale = 4, ~384 DPI)
+   * với font Times New Roman sắc nét, màu đen, nền trong suốt, xuất ra PNG Base64 (media/image1.png).
+   */
+  function buildHighDpiPngBase64(astNodes, fontSizePt, displayMode) {
+    const layout = layoutAstVectorMetrics(astNodes, fontSizePt, displayMode);
+    const {
+      rootBox,
+      padX,
+      baselineY,
+      widthPt,
+      heightPt,
+      depthPt,
+      widthPx,
+      heightPx,
+      PX_PER_U
+    } = layout;
+
+    const canvas =
+      dom.mtPreviewCanvas ||
+      (typeof document !== "undefined" ? document.createElement("canvas") : null);
+    if (!canvas || typeof canvas.getContext !== "function" || typeof canvas.toDataURL !== "function") {
+      return null;
+    }
+
+    const SCALE = 4; // 96 DPI * 4 = 384 DPI (> 300 DPI)
+    canvas.width = Math.max(16, Math.ceil(widthPx * SCALE));
+    canvas.height = Math.max(16, Math.ceil(heightPx * SCALE));
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.scale(SCALE, SCALE);
+    ctx.fillStyle = "#000000";
+    ctx.strokeStyle = "#000000";
+    ctx.textBaseline = "alphabetic";
+    ctx.textAlign = "left";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    const canvasDriver = {
+      drawText(str, _dxArr, x, y, sizeU, italic, bold) {
+        if (!str || str.length === 0) return;
+        const pxSize = Math.max(6, sizeU * PX_PER_U);
+        const prefix = (italic ? "italic " : "") + (bold ? "bold " : "");
+        ctx.font = prefix + pxSize.toFixed(2) + 'px "Times New Roman", serif';
+        ctx.fillText(str, x * PX_PER_U, y * PX_PER_U);
+      },
+
+      drawLine(x1, y1, x2, y2, strokeU) {
+        ctx.lineWidth = Math.max(0.85, strokeU * PX_PER_U);
+        ctx.beginPath();
+        ctx.moveTo(x1 * PX_PER_U, y1 * PX_PER_U);
+        ctx.lineTo(x2 * PX_PER_U, y2 * PX_PER_U);
+        ctx.stroke();
+      },
+
+      drawPolyline(points, strokeU) {
+        if (!points || points.length < 2) return;
+        ctx.lineWidth = Math.max(0.85, strokeU * PX_PER_U);
+        ctx.beginPath();
+        ctx.moveTo(points[0][0] * PX_PER_U, points[0][1] * PX_PER_U);
+        for (let i = 1; i < points.length; i++) {
+          ctx.lineTo(points[i][0] * PX_PER_U, points[i][1] * PX_PER_U);
+        }
+        ctx.stroke();
+      }
+    };
+
+    rootBox.draw(canvasDriver, padX, baselineY);
+    ctx.restore();
+
+    const dataUrl = canvas.toDataURL("image/png");
+    const commaIdx = dataUrl.indexOf(",");
+    const pngBase64 = commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : "";
+    if (!pngBase64) return null;
+
+    return {
+      imageFormat: "png",
+      pngBase64,
+      imageBase64: pngBase64,
+      widthPt,
+      heightPt,
+      depthPt,
+      widthPx,
+      heightPx
+    };
+  }
+
+  /**
+   * Điều phối sinh ảnh hiển thị cho đối tượng MathType:
+   * - Mặc định: vector EMF chuẩn GDI 96 DPI (buildEmfBase64)
+   * - Khi bật "Dùng ảnh PNG nét cao (300 DPI)": Canvas 2D scale=4 (buildHighDpiPngBase64), tự fallback về EMF nếu không có Canvas.
+   */
+  function renderMathTypePreview(astNodes, fontSizePt, displayMode, useHighDpiPng) {
+    if (useHighDpiPng) {
+      const pngRes = buildHighDpiPngBase64(astNodes, fontSizePt, displayMode);
+      if (pngRes && pngRes.imageBase64) return pngRes;
+    }
+    return buildEmfBase64(astNodes, fontSizePt, displayMode);
+  }
+
+  function renderAstToEmf(astNodes, fontSizePt, displayMode) {
+    return buildEmfBase64(astNodes, fontSizePt, displayMode);
+  }
+
+  window.buildEmfBase64 = buildEmfBase64;
+  window.buildHighDpiPngBase64 = buildHighDpiPngBase64;
   window.renderAstToEmf = renderAstToEmf;
 
   /**
    * Tạo gói Flat OPC OOXML (<pkg:package>) chuẩn độc lập cho đối tượng MathType 7.0 (Equation.DSMT4):
-   * - Ảnh hiển thị vector sắc nét: /word/media/image1.emf (pkg:contentType="image/x-emf")
+   * - Ảnh hiển thị: mặc định /word/media/image1.emf (image/x-emf) hoặc /word/media/image1.png (image/png) khi bật chế độ PNG 300 DPI
    * - Căn chỉnh thẳng hàng dòng chữ (Inline Baseline Alignment):
    *   posHalfPt = -Math.round(depthPt * 2), chèn <w:rPr><w:position w:val="${posHalfPt}"/></w:rPr> ngay trước <w:object>
-   * - Đủ các quan hệ /_rels/.rels và /word/_rels/document.xml.rels (rId_img -> media/image1.emf, rId_ole -> embeddings/oleObject1.bin)
+   * - Đủ các quan hệ /_rels/.rels và /word/_rels/document.xml.rels (rId_img -> media/image1.emf|.png, rId_ole -> embeddings/oleObject1.bin)
    * - Nhúng tệp OLE2 CFBF MathType 7.0: /word/embeddings/oleObject1.bin (ProgID="Equation.DSMT4").
    */
   function createMathTypeOoxml(params) {
-    const emfBase64 = String((params && (params.emfBase64 || params.imageBase64)) || "");
+    const isPng =
+      params &&
+      (params.imageFormat === "png" || (!params.emfBase64 && Boolean(params.pngBase64)));
+    const imageBase64 = String(
+      (params && (isPng ? (params.pngBase64 || params.imageBase64) : (params.emfBase64 || params.imageBase64))) || ""
+    );
     const oleBase64 = String((params && params.oleBase64) || "");
-    if (!emfBase64 || !oleBase64) {
-      throw new Error("Thiếu dữ liệu ảnh vector EMF hoặc tệp nhị phân OLE để tạo gói OOXML MathType.");
+    if (!imageBase64 || !oleBase64) {
+      throw new Error("Thiếu dữ liệu ảnh hiển thị (EMF/PNG) hoặc tệp nhị phân OLE để tạo gói OOXML MathType.");
     }
+
+    const mediaTarget = isPng ? "media/image1.png" : "media/image1.emf";
+    const mediaPartName = isPng ? "/word/media/image1.png" : "/word/media/image1.emf";
+    const mediaContentType = isPng ? "image/png" : "image/x-emf";
 
     const widthNum = Math.max(6, Number((params && params.widthPt) || 24));
     const heightNum = Math.max(8, Number((params && params.heightPt) || 14));
@@ -6417,7 +6596,7 @@
         '<pkg:part pkg:name="/word/_rels/document.xml.rels" pkg:contentType="application/vnd.openxmlformats-package.relationships+xml">' +
           "<pkg:xmlData>" +
             '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
-              '<Relationship Id="rId_img" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.emf"/>' +
+              '<Relationship Id="rId_img" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="' + mediaTarget + '"/>' +
               '<Relationship Id="rId_ole" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject" Target="embeddings/oleObject1.bin"/>' +
             "</Relationships>" +
           "</pkg:xmlData>" +
@@ -6446,8 +6625,8 @@
             "</w:document>" +
           "</pkg:xmlData>" +
         "</pkg:part>" +
-        '<pkg:part pkg:name="/word/media/image1.emf" pkg:contentType="image/x-emf" pkg:compression="store">' +
-          "<pkg:binaryData>" + emfBase64 + "</pkg:binaryData>" +
+        '<pkg:part pkg:name="' + mediaPartName + '" pkg:contentType="' + mediaContentType + '" pkg:compression="store">' +
+          "<pkg:binaryData>" + imageBase64 + "</pkg:binaryData>" +
         "</pkg:part>" +
         '<pkg:part pkg:name="/word/embeddings/oleObject1.bin" pkg:contentType="application/vnd.openxmlformats-officedocument.oleObject" pkg:compression="store">' +
           "<pkg:binaryData>" + oleBase64 + "</pkg:binaryData>" +
@@ -6545,6 +6724,10 @@
         (dom.optMathTypeFontSize && dom.optMathTypeFontSize.value) ||
         12
     );
+    const useHighDpiPng =
+      options && typeof options.useHighDpiPng === "boolean"
+        ? options.useHighDpiPng
+        : Boolean(dom.optMathTypePng && dom.optMathTypePng.checked);
     const shouldHighlightError =
       options && typeof options.highlightError === "boolean"
         ? options.highlightError
@@ -6650,7 +6833,7 @@
             const nativeBytes = wrapMtefInEquationNative(mtefBytes);
             const oleCfbBytes = buildOleCfbWithEquationNative(nativeBytes);
             oleBase64 = uint8ArrayToBase64(oleCfbBytes);
-            emfPreview = renderAstToEmf(ast, fontSizePt, match.displayMode);
+            emfPreview = renderMathTypePreview(ast, fontSizePt, match.displayMode, useHighDpiPng);
           } catch (buildErr) {
             const errMsg = formatWordApiError(buildErr);
             lastTechError = errMsg;
@@ -6743,7 +6926,10 @@
 
             try {
               const ooxml = createMathTypeOoxml({
+                imageFormat: emfPreview.imageFormat,
                 emfBase64: emfPreview.emfBase64,
+                pngBase64: emfPreview.pngBase64,
+                imageBase64: emfPreview.imageBase64,
                 oleBase64,
                 widthPt: emfPreview.widthPt,
                 heightPt: emfPreview.heightPt,
@@ -7644,6 +7830,7 @@
     }
 
     const fontSizePt = Number((dom.optMathTypeFontSize && dom.optMathTypeFontSize.value) || 12);
+    const useHighDpiPng = Boolean(dom.optMathTypePng && dom.optMathTypePng.checked);
     const displayMode = Boolean(state.visualDisplayMode);
 
     setBusy(true, false);
@@ -7654,15 +7841,18 @@
       const nativeBytes = wrapMtefInEquationNative(mtefBytes);
       const oleCfbBytes = buildOleCfbWithEquationNative(nativeBytes);
       const oleBase64 = uint8ArrayToBase64(oleCfbBytes);
-      const emfPreview = renderAstToEmf(ast, fontSizePt, displayMode);
+      const preview = renderMathTypePreview(ast, fontSizePt, displayMode, useHighDpiPng);
 
       const uniqueNum = Math.floor(Math.random() * 900000) + 100;
       const ooxml = createMathTypeOoxml({
-        emfBase64: emfPreview.emfBase64,
+        imageFormat: preview.imageFormat,
+        emfBase64: preview.emfBase64,
+        pngBase64: preview.pngBase64,
+        imageBase64: preview.imageBase64,
         oleBase64,
-        widthPt: emfPreview.widthPt,
-        heightPt: emfPreview.heightPt,
-        depthPt: emfPreview.depthPt,
+        widthPt: preview.widthPt,
+        heightPt: preview.heightPt,
+        depthPt: preview.depthPt,
         uniqueNum,
         objectId: "_" + (1750000000 + uniqueNum)
       });
@@ -7676,8 +7866,9 @@
       state.visualSourceKind = "mathtype";
       updateVisualSourceBadge("mathtype");
       addToHistory(latex, displayMode);
+      const fmtLabel = preview.imageFormat === "png" ? "PNG 300 DPI" : "EMF";
       showStatus(
-        "Đã cập nhật công thức thành MathType 7.0 (EMF · " + fontSizePt + "pt) tại vùng đang chọn.",
+        "Đã cập nhật công thức thành MathType 7.0 (" + fmtLabel + " · " + fontSizePt + "pt) tại vùng đang chọn.",
         "success"
       );
       return true;
