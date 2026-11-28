@@ -6469,7 +6469,9 @@
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // Tô nền trắng #FFFFFF trước khi vẽ chữ đen #000000 để VML trên Word 2019 Windows hiển thị rõ 100%
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.scale(SCALE, SCALE);
     ctx.fillStyle = "#000000";
     ctx.strokeStyle = "#000000";
@@ -6483,11 +6485,13 @@
         if (!str || str.length === 0) return;
         const pxSize = Math.max(6, sizeU * PX_PER_U);
         const prefix = (italic ? "italic " : "") + (bold ? "bold " : "");
+        ctx.fillStyle = "#000000";
         ctx.font = prefix + pxSize.toFixed(2) + 'px "Times New Roman", serif';
         ctx.fillText(str, x * PX_PER_U, y * PX_PER_U);
       },
 
       drawLine(x1, y1, x2, y2, strokeU) {
+        ctx.strokeStyle = "#000000";
         ctx.lineWidth = Math.max(0.85, strokeU * PX_PER_U);
         ctx.beginPath();
         ctx.moveTo(x1 * PX_PER_U, y1 * PX_PER_U);
@@ -6497,6 +6501,7 @@
 
       drawPolyline(points, strokeU) {
         if (!points || points.length < 2) return;
+        ctx.strokeStyle = "#000000";
         ctx.lineWidth = Math.max(0.85, strokeU * PX_PER_U);
         ctx.beginPath();
         ctx.moveTo(points[0][0] * PX_PER_U, points[0][1] * PX_PER_U);
@@ -6511,8 +6516,7 @@
     ctx.restore();
 
     const dataUrl = canvas.toDataURL("image/png");
-    const commaIdx = dataUrl.indexOf(",");
-    const pngBase64 = commaIdx !== -1 ? dataUrl.slice(commaIdx + 1) : "";
+    const pngBase64 = sanitizeBase64Payload(dataUrl);
     if (!pngBase64) return null;
 
     return {
@@ -6525,6 +6529,17 @@
       widthPx,
       heightPx
     };
+  }
+
+  /**
+   * Làm sạch chuỗi Base64 đưa vào <pkg:binaryData>:
+   * Cắt bỏ hoàn toàn tiền tố data URI (vd: data:image/png;base64,) và xóa mọi ký tự xuống dòng/khoảng trắng thừa.
+   */
+  function sanitizeBase64Payload(raw) {
+    return String(raw || "")
+      .replace(/^data:[^;,]+;base64,/i, "")
+      .replace(/\s+/g, "")
+      .trim();
   }
 
   /**
@@ -6549,7 +6564,9 @@
   window.renderAstToEmf = renderAstToEmf;
 
   /**
-   * Tạo gói Flat OPC OOXML (<pkg:package>) chuẩn độc lập cho đối tượng MathType 7.0 (Equation.DSMT4):
+   * Tạo gói Flat OPC OOXML (<pkg:package>) chuẩn độc lập cho đối tượng MathType 7.0 (Equation.DSMT4),
+   * tương thích đầy đủ cả Word 2019 Windows (đủ <v:shapetype id="_x0000_t75"> với <v:formulas>, <v:stroke>, <v:path>, <o:lock>)
+   * lẫn Word 2021 macOS / Word 365:
    * - Ảnh hiển thị: mặc định /word/media/image1.emf (image/x-emf) hoặc /word/media/image1.png (image/png) khi bật chế độ PNG 300 DPI
    * - Căn chỉnh thẳng hàng dòng chữ (Inline Baseline Alignment):
    *   posHalfPt = -Math.round(depthPt * 2), chèn <w:rPr><w:position w:val="${posHalfPt}"/></w:rPr> ngay trước <w:object>
@@ -6560,10 +6577,10 @@
     const isPng =
       params &&
       (params.imageFormat === "png" || (!params.emfBase64 && Boolean(params.pngBase64)));
-    const imageBase64 = String(
-      (params && (isPng ? (params.pngBase64 || params.imageBase64) : (params.emfBase64 || params.imageBase64))) || ""
+    const imageBase64 = sanitizeBase64Payload(
+      params && (isPng ? (params.pngBase64 || params.imageBase64) : (params.emfBase64 || params.imageBase64))
     );
-    const oleBase64 = String((params && params.oleBase64) || "");
+    const oleBase64 = sanitizeBase64Payload(params && params.oleBase64);
     if (!imageBase64 || !oleBase64) {
       throw new Error("Thiếu dữ liệu ảnh hiển thị (EMF/PNG) hoặc tệp nhị phân OLE để tạo gói OOXML MathType.");
     }
@@ -6582,6 +6599,27 @@
     const shapeId = (params && params.shapeId) || "_x0000_i1025";
     const objectId = (params && params.objectId) || "_1700000001";
     const posHalfPt = -Math.round(depthNum * 2);
+
+    const vmlShapeTypeT75 =
+      '<v:shapetype id="_x0000_t75" coordsize="21600,21600" o:spt="75" o:preferrelative="t" path="m@4@5l@4@11@9@11@9@5xe" filled="f" stroked="f">' +
+        '<v:stroke joinstyle="miter"/>' +
+        "<v:formulas>" +
+          '<v:f eqn="if lineDrawn pixelLineWidth 0"/>' +
+          '<v:f eqn="sum @0 1 0"/>' +
+          '<v:f eqn="sum 0 0 @1"/>' +
+          '<v:f eqn="prod @2 1 2"/>' +
+          '<v:f eqn="prod @3 21600 pixelWidth"/>' +
+          '<v:f eqn="prod @3 21600 pixelHeight"/>' +
+          '<v:f eqn="sum @0 0 1"/>' +
+          '<v:f eqn="prod @6 1 2"/>' +
+          '<v:f eqn="prod @7 21600 pixelWidth"/>' +
+          '<v:f eqn="sum @8 21600 0"/>' +
+          '<v:f eqn="prod @7 21600 pixelHeight"/>' +
+          '<v:f eqn="sum @10 21600 0"/>' +
+        "</v:formulas>" +
+        '<v:path o:extrusionok="f" gradientshapeok="t" o:connecttype="rect"/>' +
+        '<o:lock v:ext="edit" aspectratio="t"/>' +
+      "</v:shapetype>";
 
     return (
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
@@ -6613,8 +6651,8 @@
                   "<w:r>" +
                     '<w:rPr><w:position w:val="' + posHalfPt + '"/></w:rPr>' +
                     '<w:object w:dxaOrig="' + dxaOrig + '" w:dyaOrig="' + dyaOrig + '">' +
-                      '<v:shapetype id="_x0000_t75" coordsize="21600,21600" o:spt="75" o:preferrelative="t" path="m@4@5l@4@11@9@11@9@5xe" filled="f" stroked="f"/>' +
-                      '<v:shape id="' + escapeXml(shapeId) + '" type="#_x0000_t75" style="width:' + widthPt + "pt;height:" + heightPt + 'pt" o:ole="">' +
+                      vmlShapeTypeT75 +
+                      '<v:shape id="' + escapeXml(shapeId) + '" type="#_x0000_t75" style="width:' + widthPt + "pt;height:" + heightPt + 'pt" filled="f" stroked="f" o:ole="">' +
                         '<v:imagedata r:id="rId_img" o:title=""/>' +
                       "</v:shape>" +
                       '<o:OLEObject Type="Embed" ProgID="Equation.DSMT4" ShapeID="' + escapeXml(shapeId) + '" DrawAspect="Content" ObjectID="' + escapeXml(objectId) + '" r:id="rId_ole"/>' +
